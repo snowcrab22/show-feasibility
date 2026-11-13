@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>150-Cap Show Feasibility</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  /* Layout: a scrolling inputs rail on the left; the levers and verdict tiles lead the results column, detail follows; one column under 900px. */
+  --paper: #f1f1ed;
+  --panel: #fcfcfb;
+  --ink: #18191b;
+  --ink-2: #55565a;
+  --line: #dcdbd4;
+  --accent: #2350b5;
+  --font-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* derived roles */
+  --muted: #898781;
+  --field: #ffffff;
+  --field-line: #c9c8c0;
+  --accent-ink: #ffffff;
+  --accent-wash: #e6ecf8;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --ring: rgba(11, 11, 11, 0.10);
+  --good: #0ca30c;
+  --warn: #fab219;
+  --crit: #d03b3b;
+  --good-text: #006300;
+  --crit-text: #b42828;
+  /* chart series (dataviz reference palette, light steps) */
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --seg-tax: #a8a69f; --seg-tax-text: #0b0b0b;
+  --seg-profit: #2b2b29; --seg-profit-text: #ffffff;
+  --div-neg: #e34948; --div-mid: #f0efec; --div-pos: #2a78d6;
+  --hm-weak-text: #0b0b0b; --hm-strong-text: #ffffff;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f0f0e; --panel: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --line: #31312e;
+    --accent: #86a4f2; --muted: #8f8d86; --field: #121211; --field-line: #44443f; --accent-ink: #0f0f0e;
+    --accent-wash: #1f2a44; --grid: #2c2c2a; --axis: #45453f; --ring: rgba(255, 255, 255, 0.10);
+    --good-text: #2fc42f; --crit-text: #ff8080;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --seg-tax: #6b6a64; --seg-tax-text: #ffffff; --seg-profit: #e8e7e2; --seg-profit-text: #0b0b0b;
+    --div-neg: #e66767; --div-mid: #383835; --div-pos: #3987e5;
+    --hm-weak-text: #f0efec; --hm-strong-text: #ffffff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f0f0e; --panel: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --line: #31312e;
+  --accent: #86a4f2; --muted: #8f8d86; --field: #121211; --field-line: #44443f; --accent-ink: #0f0f0e;
+  --accent-wash: #1f2a44; --grid: #2c2c2a; --axis: #45453f; --ring: rgba(255, 255, 255, 0.10);
+  --good-text: #2fc42f; --crit-text: #ff8080;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --seg-tax: #6b6a64; --seg-tax-text: #ffffff; --seg-profit: #e8e7e2; --seg-profit-text: #0b0b0b;
+  --div-neg: #e66767; --div-mid: #383835; --div-pos: #3987e5;
+  --hm-weak-text: #f0efec; --hm-strong-text: #ffffff;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.45 var(--font-body);
+}
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: 26px; font-weight: 800; }
+h2 { font-size: 18px; font-weight: 700; }
+h3 { font-size: 15px; font-weight: 700; }
+p { margin: 0; }
+a { color: var(--accent); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.num, td.n, th.n { font-variant-numeric: tabular-nums; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Header */
+.top {
+  display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; justify-content: space-between;
+  padding: 20px 24px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.brand { display: grid; gap: 4px; }
+.eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+.venue-field { display: grid; gap: 4px; min-width: 220px; }
+.venue-field label { font-size: 12px; color: var(--ink-2); font-weight: 500; }
+.venue-field input { font: 600 17px var(--font-body); }
+.top-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Shell */
+.shell {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  grid-template-areas: "inputs levers" "inputs results";
+  grid-template-rows: auto 1fr;
+  gap: 20px;
+  padding: 20px 24px 48px;
+  max-width: 1480px; margin: 0 auto;
+  align-items: start;
+}
+.inputs { grid-area: inputs; display: grid; gap: 12px; }
+.levers { grid-area: levers; display: grid; gap: 16px; }
+.results { grid-area: results; display: grid; gap: 20px; min-width: 0; }
+@media (max-width: 900px) {
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-areas: "levers" "inputs" "results"; padding: 16px; gap: 16px; }
+  .top { padding: 16px; }
+}
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; min-width: 0; }
+.card-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.card-sub { color: var(--ink-2); font-size: 13px; }
+
+/* Inputs */
+details.group { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+details.group > summary {
+  list-style: none; cursor: pointer; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--font-display); font-weight: 700; font-size: 15px;
+}
+details.group > summary::-webkit-details-marker { display: none; }
+details.group > summary::after { content: "\2013"; color: var(--ink-2); font-family: var(--font-body); }
+details.group:not([open]) > summary::after { content: "+"; }
+.group-body { display: grid; gap: 12px; padding: 0 16px 16px; }
+.field { display: grid; gap: 4px; }
+.field[hidden] { display: none; }
+.field > label, .field .flabel { font-size: 13px; font-weight: 500; color: var(--ink); }
+.hint { font-size: 12px; color: var(--ink-2); }
+.note { font-size: 12px; color: var(--ink-2); border-left: 2px solid var(--axis); padding-left: 8px; }
+.field.is-off .input-wrap, .field.is-off select, .field.is-off .row-amount { opacity: 0.5; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+input[type="number"], input[type="text"], select, textarea {
+  font: inherit; color: var(--ink); background: var(--field);
+  border: 1px solid var(--field-line); border-radius: 6px; padding: 7px 9px; width: 100%; min-width: 0;
+}
+textarea { font: 13px/1.4 ui-monospace, "Cascadia Mono", Menlo, monospace; resize: vertical; }
+input[type="number"] { font-variant-numeric: tabular-nums; }
+select { padding-right: 28px; }
+.input-wrap { position: relative; display: flex; align-items: center; }
+.input-wrap .unit { position: absolute; color: var(--ink-2); font-size: 14px; pointer-events: none; }
+.input-wrap.pre input { padding-left: 22px; }
+.input-wrap.pre .unit { left: 9px; }
+.input-wrap.post input { padding-right: 26px; }
+.input-wrap.post .unit { right: 10px; }
+
+.toggle-row { display: grid; grid-template-columns: 1fr 120px; gap: 10px; align-items: center; }
+.check { display: flex; gap: 8px; align-items: center; font-size: 13px; font-weight: 500; cursor: pointer; }
+.check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); flex: none; }
+.subgroup { display: grid; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
+
+.custom-list { display: grid; gap: 8px; }
+.custom-row { display: grid; grid-template-columns: 1fr 104px auto; gap: 6px; align-items: center; }
+
+button {
+  font: 500 14px var(--font-body); color: var(--ink); background: var(--panel);
+  border: 1px solid var(--field-line); border-radius: 6px; padding: 7px 12px; cursor: pointer;
+}
+button:hover { background: var(--accent-wash); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.primary:hover { filter: brightness(1.08); }
+button.small { padding: 4px 9px; font-size: 13px; }
+button.danger-armed { border-color: var(--crit); color: var(--crit-text); }
+
+/* Levers */
+.lever-card { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 16px 24px; align-items: end; }
+@media (max-width: 560px) { .lever-card { grid-template-columns: minmax(0, 1fr); } }
+.lever-label { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.lever-label label, .lever-title { font-family: var(--font-display); font-weight: 700; font-size: 15px; }
+.lever-n { display: flex; gap: 10px; align-items: center; }
+.lever-n input[type="number"] { width: 84px; font-size: 18px; font-weight: 600; }
+.lever-price input { font-size: 20px; font-weight: 600; }
+input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; margin: 0; }
+.quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.quick button[aria-pressed="true"] { background: var(--accent-wash); border-color: var(--accent); }
+
+/* Tiles */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 6px; align-content: start; }
+.tile-label { font-size: 13px; color: var(--ink-2); font-weight: 500; }
+.tile-value { font-size: 28px; font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; }
+.tile.hero .tile-value { font-size: 40px; }
+.tile-sub { font-size: 13px; color: var(--ink-2); }
+.tile.hero { border-left: 4px solid var(--axis); }
+.tile.hero[data-status="profit"] { border-left-color: var(--good); }
+.tile.hero[data-status="loss"] { border-left-color: var(--crit); }
+.tile.hero[data-status="even"] { border-left-color: var(--warn); }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 2px 9px 2px 7px; border-radius: 999px; border: 1px solid var(--line); width: max-content; }
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.pill[data-status="profit"]::before { background: var(--good); }
+.pill[data-status="loss"]::before { background: var(--crit); border-radius: 1px; transform: rotate(45deg); }
+.pill[data-status="even"]::before { background: var(--warn); }
+.tile-value.loss { color: var(--crit-text); }
+
+/* Chart */
+.chart-wrap { position: relative; width: 100%; }
+.chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: pan-y; }
+.chart-wrap svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.ax text, .chart-label { fill: var(--ink-2); font: 12px var(--font-body); font-variant-numeric: tabular-nums; }
+.chart-label.strong { fill: var(--ink); font-weight: 600; }
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.zeroline { stroke: var(--axis); stroke-width: 1.5; }
+.series { fill: none; stroke: var(--s1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.marker { fill: var(--s1); stroke: var(--panel); stroke-width: 2; }
+.be-line { stroke: var(--ink-2); stroke-width: 1; }
+.cross { stroke: var(--ink-2); stroke-width: 1; }
+.chart-caption { font-size: 12px; color: var(--ink-2); margin-top: 8px; }
+
+.tip {
+  position: fixed; z-index: 20; pointer-events: none; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0,0,0,0.12); border-radius: 6px; padding: 8px 10px;
+  font-size: 13px; min-width: 140px; display: none;
+}
+.tip .tv { font-weight: 600; font-size: 15px; font-variant-numeric: tabular-nums; }
+.tip .tl { color: var(--ink-2); }
+.tip .row { display: flex; align-items: center; gap: 8px; }
+.tip .key { width: 12px; height: 2px; background: var(--s1); flex: none; }
+
+/* Money bar */
+.segbar { display: flex; gap: 2px; height: 28px; width: 100%; position: relative; }
+.seg { height: 28px; border-radius: 4px; display: flex; align-items: center; padding-left: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: visible; cursor: default; min-width: 0; }
+.seg:hover, .seg:focus-visible { filter: brightness(1.1); }
+.seg-text-light { color: #ffffff; }
+.seg-text-dark { color: #0b0b0b; }
+.seg-wrap { position: relative; padding-top: 22px; }
+.inflow-mark { position: absolute; top: 0; bottom: -6px; width: 0; border-left: 2px solid var(--ink); }
+.inflow-mark span { position: absolute; top: 0; left: 6px; font-size: 12px; white-space: nowrap; color: var(--ink); font-weight: 600; }
+.inflow-mark.flip span { left: auto; right: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
+.shortfall { margin-top: 10px; font-size: 14px; color: var(--crit-text); font-weight: 600; }
+
+/* Tables */
+.table-scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--ink-2); font-size: 12px; }
+td.n, th.n { text-align: right; white-space: nowrap; }
+tr.total td { font-weight: 600; border-top: 1px solid var(--axis); }
+tr.sub td { color: var(--ink-2); }
+tr.sub td:first-child { padding-left: 20px; }
+tr.current td { background: var(--accent-wash); }
+td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: 0; }
+.pos { color: var(--good-text); }
+.neg { color: var(--crit-text); }
+.off { color: var(--muted); }
+
+.two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+
+/* Heatmap */
+.heat { border-collapse: separate; border-spacing: 2px; width: 100%; table-layout: fixed; }
+.heat th, .heat td { border: 0; text-align: center; padding: 0; }
+.heat thead th { padding: 4px 2px; font-size: 12px; }
+.heat tbody th { text-align: right; padding-right: 8px; font-size: 12px; font-weight: 500; width: 88px; color: var(--ink-2); white-space: nowrap; }
+.heat td { height: 44px; border-radius: 4px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: default; }
+.heat td.weak { color: var(--hm-weak-text); }
+.heat td.strong { color: var(--hm-strong-text); }
+.heat td:hover, .heat td:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+.heat td.here { box-shadow: inset 0 0 0 2px var(--panel), inset 0 0 0 4px var(--ink); }
+.heat th.here { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.heat-legend { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--ink-2); }
+.heat-ramp { height: 10px; border-radius: 5px; background: linear-gradient(to right, var(--div-neg), var(--div-mid), var(--div-pos)); position: relative; }
+.heat-ramp::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; border-left: 1px solid var(--ink-2); }
+@media (max-width: 480px) {
+  .heat td { font-size: 11px; height: 38px; }
+  .heat tbody th { width: 64px; }
+}
+
+/* Share & notes */
+.share-grid { display: grid; gap: 12px; }
+.share-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.msg { font-size: 13px; color: var(--ink-2); min-height: 1.4em; }
+.msg.err { color: var(--crit-text); }
+.msg.ok { color: var(--good-text); }
+.notes { display: grid; gap: 8px; padding-left: 18px; margin: 0; max-width: 75ch; }
+.notes li { font-size: 14px; }
+.notes strong { font-weight: 600; }
+.confirm-list li::marker { color: var(--crit); }
+
+@media (prefers-reduced-motion: no-preference) {
+  button, .seg, .heat td { transition: background-color 120ms ease, filter 120ms ease; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="eyebrow">KC PLUR &middot; show planning</span>
+    <h1>150-Cap Show Feasibility</h1>
+  </div>
+  <div class="venue-field">
+    <label for="f-venueName">Venue</label>
+    <input type="text" id="f-venueName" data-k="venueName" data-kind="text" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="top-actions">
+    <button type="button" id="btn-copy-summary-top" class="primary">Copy summary</button>
+    <button type="button" id="btn-copy-code-top">Copy scenario code</button>
+  </div>
+</header>
+
+<main class="shell">
+  <section class="levers" aria-label="Main levers and verdict">
+    <div class="card lever-card">
+      <div class="field">
+        <div class="lever-label">
+          <label for="n-slider">Tickets sold</label>
+          <span class="card-sub" id="n-context"></span>
+        </div>
+        <div class="lever-n">
+          <input type="range" id="n-slider" min="0" max="140" step="1" aria-describedby="n-context">
+          <label class="sr-only" for="n-input">Tickets sold (number)</label>
+          <input type="number" id="n-input" min="0" step="1" inputmode="numeric">
+        </div>
+        <div class="quick" role="group" aria-label="Set tickets sold to a share of sellable">
+          <button type="button" class="small" id="q-25" data-q="25">25%</button>
+          <button type="button" class="small" id="q-50" data-q="50">50%</button>
+          <button type="button" class="small" id="q-75" data-q="75">75%</button>
+          <button type="button" class="small" id="q-90" data-q="90">90%</button>
+          <button type="button" class="small" id="q-100" data-q="100">Sold out</button>
+        </div>
+      </div>
+      <div class="field lever-price">
+        <label for="f-price" class="lever-title">Ticket price</label>
+        <div class="input-wrap pre"><span class="unit">$</span><input type="number" id="f-price" data-k="price" min="0" step="1" inputmode="decimal"></div>
+        <span class="hint" id="price-hint"></span>
+      </div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <aside class="inputs" id="inputs" aria-label="Show inputs"></aside>
+
+  <section class="results" aria-label="Results">
+    <div class="card">
+      <div class="card-head">
+        <h2>Profit vs tickets sold</h2>
+        <span class="card-sub" id="chart-sub"></span>
+      </div>
+      <div class="chart-wrap" id="chart-wrap"></div>
+      <p class="chart-caption">Hover or use the arrow keys on the chart to read any ticket count; click or press Enter to set it as tickets sold.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Where the money goes</h2>
+        <span class="card-sub" id="money-sub"></span>
+      </div>
+      <div class="seg-wrap" id="money-bar-wrap"></div>
+      <div class="legend" id="money-legend"></div>
+      <p class="shortfall" id="money-shortfall" hidden></p>
+      <div class="table-scroll" style="margin-top:14px">
+        <table id="money-table">
+          <caption class="sr-only">Where the money goes, table view</caption>
+          <thead><tr><th scope="col">Goes to</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Share</th><th scope="col" class="n">Per ticket sold</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Net profit by price and attendance</h2>
+        <span class="card-sub">Blue is profit, red is loss, gray is about $0</span>
+      </div>
+      <div class="table-scroll">
+        <table class="heat" id="heatmap">
+          <caption class="sr-only">Net profit for each ticket price and attendance level</caption>
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="heat-legend" aria-hidden="true">
+        <span id="heat-min"></span><div class="heat-ramp"></div><span id="heat-max"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Scenarios at this price</h2>
+        <span class="card-sub" id="scen-sub"></span>
+      </div>
+      <div class="table-scroll">
+        <table id="scenarios">
+          <caption class="sr-only">Results at 25, 50, 75, 90 and 100 percent of sellable tickets</caption>
+          <thead><tr><th scope="col">Sold</th><th scope="col" class="n">Tickets</th><th scope="col" class="n">Net ticket revenue</th><th scope="col" class="n">Headliner pay</th><th scope="col" class="n">Total costs</th><th scope="col" class="n">Net</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <div class="card-head"><h2>Headliner payout</h2><span class="card-sub" id="hl-sub"></span></div>
+        <table id="hl-table"><caption class="sr-only">Headliner payout breakdown</caption><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Per ticket</h2><span class="card-sub" id="pt-sub"></span></div>
+        <table id="pt-table"><caption class="sr-only">Per-ticket prices and fees</caption><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <div class="card-head"><h2>Ticket money</h2><span class="card-sub" id="tm-sub"></span></div>
+        <table id="tm-table"><caption class="sr-only">Ticket money breakdown</caption><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Costs</h2><span class="card-sub" id="cost-sub"></span></div>
+        <table id="cost-table"><caption class="sr-only">Cost lines</caption><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div class="card" id="share">
+      <div class="card-head"><h2>Share this scenario</h2></div>
+      <div class="share-grid">
+        <div class="share-row">
+          <button type="button" id="btn-copy-summary" class="primary">Copy summary</button>
+          <button type="button" id="btn-copy-code">Copy scenario code</button>
+          <button type="button" id="btn-reset">Reset to defaults</button>
+        </div>
+        <p class="msg" id="share-msg" role="status" aria-live="polite"></p>
+        <div class="field" id="copy-fallback" hidden>
+          <label for="copy-fallback-text">Copying was blocked. Select this text and copy it yourself.</label>
+          <textarea id="copy-fallback-text" rows="6" readonly></textarea>
+        </div>
+        <div class="field">
+          <label for="load-code">Load a scenario code</label>
+          <textarea id="load-code" rows="3" placeholder="Paste a scenario code from a teammate"></textarea>
+        </div>
+        <div class="share-row"><button type="button" id="btn-load">Load scenario</button></div>
+        <p class="hint">The summary is plain text for Discord or a text thread. The scenario code holds every input, so whoever loads it sees the same numbers. Your last scenario is also kept in this browser.</p>
+      </div>
+    </div>
+
+    <div class="card" id="assumptions">
+      <div class="card-head"><h2>Assumptions and things to confirm</h2></div>
+      <div class="two-col">
+        <div>
+          <h3 style="margin-bottom:8px">Confirm before booking</h3>
+          <ul class="notes confirm-list" id="confirm-list"></ul>
+        </div>
+        <div>
+          <h3 style="margin-bottom:8px">How the numbers work</h3>
+          <ul class="notes" id="assume-list"></ul>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="tip" id="tip" role="presentation"></div>
+
+<script src="model.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
