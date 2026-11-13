@@ -66,6 +66,8 @@
       { k: "comps", label: "Comps / guest list", type: "int", hint: "Count toward attendance, not revenue." },
       { type: "readout", id: "sellable-readout", label: "Sellable tickets" },
       { k: "onlinePct", label: "Sold online via Eventbrite", type: "pct", hint: "The rest sell at the door." },
+      { k: "doorPrice", toggle: "doorPriceOn", label: "Different price at the door", type: "money",
+        hint: "Door tickets sell at this price; online tickets use the ticket price." },
       { k: "doorCashPct", label: "Door sales paid in cash", type: "pct", hint: "Cash has no processing fee." },
       { pair: [
         { k: "doorCardPct", label: "Door card processing", type: "pct", step: 0.1 },
@@ -75,7 +77,7 @@
     { id: "g-tax", title: "Taxes & fees", fields: [
       { k: "taxOn", label: "Collect sales tax", type: "check" },
       { k: "taxRate", label: "Sales tax rate", type: "pct", step: 0.001, dependsOn: "taxOn",
-        note: "Kansas City (Westport) combined rate. Look up the new venue's address on the Missouri DOR lookup." },
+        note: "Combined rate for the venue's address. Look it up on the Missouri DOR lookup." },
       { k: "taxMode", label: "Sales tax is", type: "select", dependsOn: "taxOn", options: [["included", "Included in price"], ["ontop", "Added on top (buyer pays extra)"]] },
       { k: "ebMode", label: "Eventbrite fees", type: "select", options: [["pass", "Pass fees to buyer"], ["absorb", "Absorb fees (included in price)"]] },
       { pair: [
@@ -465,7 +467,9 @@
     var A = { ascii: true };
     var lines = [];
     lines.push("150-Cap Show Feasibility - " + (inp.venueName || "New venue"));
-    lines.push(r.n + " of " + S + " sellable tickets at " + fmt$(inp.price, { cents: inp.price % 1 !== 0 }) + " (" + inp.comps + " comps, cap " + inp.capacity + ")");
+    lines.push(r.n + " of " + S + " sellable tickets at " + fmt$(inp.price, { cents: inp.price % 1 !== 0 }) +
+      (inp.doorPriceOn ? " (" + fmt$(inp.doorPrice, { cents: inp.doorPrice % 1 !== 0 }) + " at the door)" : "") +
+      " (" + inp.comps + " comps, cap " + inp.capacity + ")");
     lines.push("Net: " + fmt$(r.net, A) + " (" + STATUS_LABEL[statusOf(r.net)].toLowerCase() + ")");
     lines.push("Break-even: " + (b.be === null ? "can't break even at this price, even sold out" : b.be + " tickets (" + fmtPct(b.be / Math.max(1, S)) + " of sellable)"));
     lines.push("Break-even price at " + r.n + " sold: " + (b.bePrice === null ? "none" : fmt$(b.bePrice, { cents: true })));
@@ -819,7 +823,7 @@
     var grid = HEAT_PCTS.map(function (p) {
       var n = Math.round(S * p / 100);
       return { p: p, n: n, cells: HEAT_PRICES.map(function (price) {
-        return { price: price, net: M.compute(Object.assign({}, inp, { price: price }), n).net };
+        return { price: price, net: M.compute(M.withPrice(inp, price), n).net };
       }) };
     });
     var maxAbs = 1;
@@ -905,13 +909,18 @@
   function renderPerTicket(r, inp) {
     var p = r.perTicketPrices, tb = $("pt-table").tBodies[0], C = { cents: true };
     tb.textContent = "";
-    $("pt-sub").textContent = fmt$(inp.price, C) + " face price";
+    $("pt-sub").textContent = fmt$(inp.price, C) + " face price" + (inp.doorPriceOn ? ", " + fmt$(p.doorPrice, C) + " at the door" : "");
     addRow(tb, "Ours after sales tax", fmt$(p.faceNet, C));
     addRow(tb, "Sales tax " + (inp.taxOn ? (inp.taxMode === "included" ? "(inside the price)" : "(added on top)") : "(off)"), fmt$(p.tax, C));
     addRow(tb, "Eventbrite service fee", fmt$(p.ebService, C), { cls: "sub" });
     addRow(tb, "Eventbrite processing", fmt$(p.ebProc, C), { cls: "sub" });
     addRow(tb, "Eventbrite fees " + (inp.ebMode === "pass" ? "paid by the buyer" : "absorbed by us"), fmt$(p.ebFee, C));
     addRow(tb, "Buyer pays online", fmt$(p.onlineBuyer, C), { cls: "total" });
+    if (inp.doorPriceOn) {
+      addRow(tb, "Door face price", fmt$(p.doorPrice, C));
+      addRow(tb, "Door: ours after sales tax", fmt$(p.doorFaceNet, C), { cls: "sub" });
+      addRow(tb, "Door: sales tax", fmt$(p.doorTax, C), { cls: "sub" });
+    }
     addRow(tb, "Door card fee (card buyers)", fmt$(p.doorCardProc, C));
     addRow(tb, "Buyer pays at the door", fmt$(p.doorBuyer, C), { cls: "total" });
     var keep = r.n ? r.netTicketRevenue / r.n : 0;
@@ -970,7 +979,7 @@
     cl.textContent = ""; al.textContent = "";
     function li(host, strong, rest) { host.appendChild(el("li", {}, [el("strong", { text: strong }), " " + rest])); }
     li(cl, "Door-cut basis.", "The venue takes " + inp.doorCutPct + "% of " + CUT_SHORT[inp.doorCutBasis] + ". Confirm with the venue what the 15% is taken from; switching to gross face moves the numbers.");
-    li(cl, "Sales tax rate.", (inp.taxOn ? inp.taxRate + "% " + (inp.taxMode === "included" ? "included in the price" : "added on top") : "Sales tax is off") + ". 10.975% is a Kansas City (Westport) combined rate; look up the new venue's address on the Missouri DOR lookup.");
+    li(cl, "Sales tax rate.", (inp.taxOn ? inp.taxRate + "% " + (inp.taxMode === "included" ? "included in the price" : "added on top") : "Sales tax is off") + ". Look up the venue address's combined rate on the Missouri DOR lookup.");
     li(cl, "Eventbrite rates.", inp.ebServicePct + "% + " + fmt$(inp.ebServiceFixed, { cents: true }) + " service and " + inp.ebProcPct + "% processing, " + (inp.ebMode === "pass" ? "passed to the buyer" : "absorbed by us") + ". US rates as of Nov 2026; check Eventbrite's pricing page.");
     li(cl, "PRO licensing.", "ASCAP and BMI are " + (inp.ascapOn || inp.bmiOn ? "partly on" : "off") + ": usually the venue's license. Turn them on if the venue requires promoter coverage.");
     li(cl, "Insurance.", "Event insurance is " + (inp.insuranceOn ? "on" : "off") + " (a recent one-night quote was $357). Check whether the new venue requires it.");
@@ -979,9 +988,12 @@
     li(al, "Tickets.", "Capacity " + inp.capacity + " minus " + inp.comps + " comps leaves " + b.S + " sellable. Comps count toward attendance, not revenue. Online and door splits use whole tickets.");
     li(al, "Our money.", "Net ticket revenue is ticket sales after sales tax, minus Eventbrite fees we absorb, door card processing and the venue door cut. Sales tax and fees passed to buyers are never ours.");
     li(al, "Passed fees.", "When fees go to the buyer, Eventbrite processing applies to the whole checkout, so the buyer total is (face + on-top tax + service fee) / (1 - processing %).");
+    li(al, "Door price.", inp.doorPriceOn
+      ? "Door tickets sell at " + fmt$(inp.doorPrice, { cents: inp.doorPrice % 1 !== 0 }) + " and online tickets at " + fmt$(inp.price, { cents: inp.price % 1 !== 0 }) + ". The heatmap and break-even price move both prices together, keeping the door markup."
+      : "Door tickets sell at the same price as online tickets.");
     li(al, "Door card fee.", "The % applies to what the door buyer is charged, including any on-top tax. Cash has no fee.");
     li(al, "Headliner break-even.", "The first ticket count where net reaches $0 counting the guarantee and all other costs but no headliner bonus, % or backend. After-break-even parts pay only on tickets past it, and pay nothing if the show never gets there.");
-    li(al, "Headliner % basis.", "Gross face is tickets x listed price. Face net removes included sales tax. A % that starts later pays on the difference between the basis at the current count and at the start point.");
+    li(al, "Headliner % basis.", "Gross face is tickets x listed price (door price for door tickets). Face net removes included sales tax. A % that starts later pays on the difference between the basis at the current count and at the start point.");
     li(al, "Versus.", "Pays the greater of the guarantee and the % plus per-ticket parts; with the guarantee off the floor is $0. Backend is added after.");
     li(al, "Contingency.", inp.contingencyPct + "% of every other cost including the guarantee, but not the headliner %, per-ticket, versus overage or backend.");
     li(al, "Break-even price.", "The lowest price, to the cent, where the chosen ticket count reaches $0 net, searched up to $1,000.");

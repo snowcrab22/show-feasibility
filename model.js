@@ -10,9 +10,12 @@
  *  - Tax off: rate r = 0 in both tax modes.
  *  - Channel split uses whole tickets: online = round(n x online%), door = n - online;
  *    door cash = round(door x cash%), door card = door - door cash.
- *  - Headliner "gross face" = n x listed ticket price. Venue door-cut basis 3
+ *  - Headliner "gross face" = online x ticket price + door x door price. Venue door-cut basis 3
  *    ("gross face value incl. tax") also includes tax added on top.
  *  - Door card fee % applies to what the door buyer is charged (incl. on-top tax).
+ *  - Door price (when on) replaces the ticket price for door tickets only; online
+ *    tickets and Eventbrite fees use the ticket price. Price sweeps (break-even
+ *    price, heatmap) keep the door markup fixed and move both prices together.
  *  - Thresholded % part = pct x (basis(n) - basis(threshold)), so it also works on
  *    the net-revenue basis.
  *  - Contingency base excludes every variable headliner part (% part, $/ticket,
@@ -33,17 +36,19 @@
     venueName: "New venue",
     // Tickets & sales
     capacity: 150,
-    comps: 10,
+    comps: 5,
     price: 25,
     expectedPct: 75,          // default ticket-count slider position, % of sellable
-    onlinePct: 50,            // % sold online via Eventbrite
-    doorCashPct: 30,          // % of door sales paid in cash
+    onlinePct: 100,           // % sold online via Eventbrite
+    doorPriceOn: false,       // door tickets sell at a different price
+    doorPrice: 30,            // door face price when doorPriceOn
+    doorCashPct: 0,           // % of door sales paid in cash
     doorCardPct: 2.6,         // door card processing %
     doorCardFixed: 0.15,      // door card processing $ per ticket
     // Sales tax
     taxOn: true,
-    taxRate: 10.975,
-    taxMode: "included",      // "included" | "ontop"
+    taxRate: 10,
+    taxMode: "ontop",         // "included" | "ontop"
     // Eventbrite
     ebServicePct: 3.7,
     ebServiceFixed: 1.79,
@@ -51,41 +56,41 @@
     ebMode: "pass",           // "pass" | "absorb"
     // Venue deal
     doorCutPct: 15,
-    doorCutBasis: "afterTax", // "afterTax" | "afterTaxFees" | "gross"
+    doorCutBasis: "afterTaxFees", // "afterTax" | "afterTaxFees" | "gross"
     venueRental: 0,
     // Headliner deal
-    hlPreset: "flat",
+    hlPreset: "flatBonus",
     hlGuaranteeOn: true,
-    hlGuarantee: 1000,
+    hlGuarantee: 250,
     hlPctOn: false,
     hlPct: 20,
     hlPctBasis: "faceNet",    // "grossFace" | "faceNet" | "net"
     hlPctStart: "first",      // "first" | "breakEven" | "afterN"
     hlPctStartN: 75,
-    hlPerTicketOn: false,
-    hlPerTicket: 2,
+    hlPerTicketOn: true,
+    hlPerTicket: 10,
     hlPerTicketStart: "breakEven",
     hlPerTicketStartN: 75,
     hlBackendOn: false,
     hlBackendPct: 20,
     hlVersus: false,
-    hlTravel: 0,
+    hlTravel: 100,
     hlHospitality: 50,
     // Lineup
-    supportSlots: 3,
-    supportPrice: 100,
-    vjOn: true,
+    supportSlots: 4,
+    supportPrice: 80,
+    vjOn: false,
     vj: 300,
     // Production
     securityOn: true,
-    security: 300,
-    soundOn: false,
-    sound: 600,
+    security: 100,
+    soundOn: true,
+    sound: 400,
     gearOn: false,
     gear: 50,
     photo: 0,
     // Marketing
-    ads: 200,
+    ads: 60,
     poster: 75,
     printing: 0,
     // Other
@@ -177,32 +182,36 @@
   // ---------------------------------------------------------------------------
   // Ticket side: everything that depends only on n and the ticket/fee/venue inputs.
   function ticketSide(inp, n) {
-    var P = inp.price;
     var r = inp.taxOn ? inp.taxRate / 100 : 0;
     var included = inp.taxMode === "included";
 
-    var faceNetPer = included ? P / (1 + r) : P;           // our share of the face, tax removed
-    var taxPer = included ? P - faceNetPer : P * r;         // tax collected per ticket
-    var taxOnTopPer = included ? 0 : taxPer;
-    var grossPer = P + taxOnTopPer;                         // face incl. tax (what door/absorb buyers pay)
+    // Face, tax and buyer-facing gross for one ticket at face price P.
+    function face(P) {
+      var faceNet = included ? P / (1 + r) : P;            // our share of the face, tax removed
+      var tax = included ? P - faceNet : P * r;             // tax collected per ticket
+      return { P: P, faceNet: faceNet, tax: tax, gross: P + (included ? 0 : tax) };
+    }
+    var on = face(inp.price);                                // online (advance) ticket
+    var dr = face(inp.doorPriceOn ? inp.doorPrice : inp.price); // door ticket
 
     // Eventbrite (online only)
+    var P = on.P;
     var ebProc = inp.ebProcPct / 100;
     var ebService = inp.ebServicePct / 100 * P + inp.ebServiceFixed;
     var onlineBuyerPer, ebProcPer;
     if (inp.ebMode === "pass") {
-      onlineBuyerPer = (grossPer + ebService) / (1 - ebProc);
+      onlineBuyerPer = (on.gross + ebService) / (1 - ebProc);
       ebProcPer = onlineBuyerPer * ebProc;
     } else {
-      onlineBuyerPer = grossPer;
-      ebProcPer = grossPer * ebProc;
+      onlineBuyerPer = on.gross;
+      ebProcPer = on.gross * ebProc;
     }
     var ebFeePer = ebService + ebProcPer;
     var ebAbsorbedPer = inp.ebMode === "absorb" ? ebFeePer : 0;
     var ebPassedPer = inp.ebMode === "pass" ? ebFeePer : 0;
 
     // Door
-    var doorBuyerPer = grossPer;
+    var doorBuyerPer = dr.gross;
     var doorCardProcPer = inp.doorCardPct / 100 * doorBuyerPer + inp.doorCardFixed;
 
     // Counts (whole tickets)
@@ -212,9 +221,9 @@
     var doorCash = Math.round(door * inp.doorCashPct / 100);
     var doorCard = door - doorCash;
 
-    var faceNet = n * faceNetPer;
-    var tax = n * taxPer;
-    var grossFace = n * P;
+    var faceNet = online * on.faceNet + door * dr.faceNet;
+    var tax = online * on.tax + door * dr.tax;
+    var grossFace = online * on.P + door * dr.P;
     var ebPassed = online * ebPassedPer;
     var ebAbsorbed = online * ebAbsorbedPer;
     var ebService_t = online * ebService;
@@ -224,7 +233,7 @@
     var cutBasis;
     if (inp.doorCutBasis === "afterTax") cutBasis = faceNet;
     else if (inp.doorCutBasis === "afterTaxFees") cutBasis = faceNet - ebAbsorbed - doorProc;
-    else cutBasis = n * grossPer;
+    else cutBasis = online * on.gross + door * dr.gross;
     var doorCut = Math.max(0, cutBasis) * inp.doorCutPct / 100;
 
     var buyersPaid = online * onlineBuyerPer + door * doorBuyerPer;
@@ -234,10 +243,12 @@
       n: n,
       counts: { online: online, door: door, doorCash: doorCash, doorCard: doorCard },
       perTicket: {
-        faceNet: faceNetPer, tax: taxPer, gross: grossPer,
+        faceNet: on.faceNet, tax: on.tax, gross: on.gross,
         ebService: ebService, ebProc: ebProcPer, ebFee: ebFeePer,
         ebAbsorbed: ebAbsorbedPer, ebPassed: ebPassedPer,
-        onlineBuyer: onlineBuyerPer, doorBuyer: doorBuyerPer, doorCardProc: doorCardProcPer
+        onlineBuyer: onlineBuyerPer,
+        doorPrice: dr.P, doorFaceNet: dr.faceNet, doorTax: dr.tax, doorGross: dr.gross,
+        doorBuyer: doorBuyerPer, doorCardProc: doorCardProcPer
       },
       grossFace: grossFace,
       faceNet: faceNet,
@@ -255,6 +266,14 @@
       buyersPaidDoor: door * doorBuyerPer,
       netTicketRevenue: netTicketRevenue
     };
+  }
+
+  // Same scenario at a different ticket price. A separate door price keeps its
+  // markup over the ticket price, so price sweeps move both together.
+  function withPrice(inp, price) {
+    var x = Object.assign({}, inp, { price: price });
+    if (inp.doorPriceOn) x.doorPrice = Math.max(0, inp.doorPrice + price - inp.price);
+    return x;
   }
 
   // Fixed (non-variable) cost lines. Guarantee is included; variable headliner parts are not.
@@ -453,7 +472,7 @@
     var inp = sanitize(inputs);
     var n = Math.min(sellable(inp), Math.max(0, Math.round(num(ticketsSold, 0))));
     function netAt(cents) {
-      var x = Object.assign({}, inp, { price: cents / 100 });
+      var x = withPrice(inp, cents / 100);
       return computeCore(x, n, headlinerBreakEven(x)).net;
     }
     if (netAt(0) >= -EPS) return 0;
@@ -481,6 +500,7 @@
     sweep: sweep,
     breakEven: breakEven,
     headlinerBreakEven: headlinerBreakEven,
-    breakEvenPrice: breakEvenPrice
+    breakEvenPrice: breakEvenPrice,
+    withPrice: withPrice
   };
 });
