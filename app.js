@@ -6,7 +6,7 @@
   var SVGNS = "http://www.w3.org/2000/svg";
   var MINUS = "−";
 
-  var state = { inputs: M.sanitize(M.DEFAULTS), n: M.expectedTickets(M.DEFAULTS), nWant: M.expectedTickets(M.DEFAULTS) };
+  var state = { inputs: M.sanitize(M.DEFAULTS), n: M.DEFAULT_N, nWant: M.DEFAULT_N };
   // nWant is the ticket count the user asked for; n is nWant clamped to the current sellable count.
   var last = null; // last computed bundle, for resize re-render and copy
 
@@ -383,7 +383,7 @@
       clearTimeout(armed); armed = null;
       b.textContent = "Reset to defaults"; b.classList.remove("danger-armed");
       state.inputs = M.sanitize(M.DEFAULTS);
-      state.nWant = state.n = M.expectedTickets(state.inputs);
+      state.nWant = state.n = Math.min(M.DEFAULT_N, M.sellable(state.inputs));
       syncControls();
       recompute();
       showMsg("Reset to the default scenario.", "ok");

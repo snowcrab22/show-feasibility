@@ -39,10 +39,10 @@
     comps: 5,
     price: 25,
     expectedPct: 75,          // default ticket-count slider position, % of sellable
-    onlinePct: 100,           // % sold online via Eventbrite
-    doorPriceOn: false,       // door tickets sell at a different price
+    onlinePct: 50,           // % sold online via Eventbrite
+    doorPriceOn: true,       // door tickets sell at a different price
     doorPrice: 30,            // door face price when doorPriceOn
-    doorCashPct: 0,           // % of door sales paid in cash
+    doorCashPct: 30,           // % of door sales paid in cash
     doorCardPct: 2.6,         // door card processing %
     doorCardFixed: 0.15,      // door card processing $ per ticket
     // Sales tax
@@ -56,41 +56,41 @@
     ebMode: "pass",           // "pass" | "absorb"
     // Venue deal
     doorCutPct: 15,
-    doorCutBasis: "afterTaxFees", // "afterTax" | "afterTaxFees" | "gross"
+    doorCutBasis: "afterTax", // "afterTax" | "afterTaxFees" | "gross"
     venueRental: 0,
     // Headliner deal
     hlPreset: "flatBonus",
     hlGuaranteeOn: true,
-    hlGuarantee: 250,
+    hlGuarantee: 300,
     hlPctOn: false,
     hlPct: 20,
     hlPctBasis: "faceNet",    // "grossFace" | "faceNet" | "net"
     hlPctStart: "first",      // "first" | "breakEven" | "afterN"
     hlPctStartN: 75,
     hlPerTicketOn: true,
-    hlPerTicket: 10,
+    hlPerTicket: 5,
     hlPerTicketStart: "breakEven",
     hlPerTicketStartN: 75,
     hlBackendOn: false,
     hlBackendPct: 20,
     hlVersus: false,
-    hlTravel: 100,
+    hlTravel: 90,
     hlHospitality: 50,
     // Lineup
-    supportSlots: 4,
-    supportPrice: 80,
+    supportSlots: 3,
+    supportPrice: 75,
     vjOn: false,
     vj: 300,
     // Production
     securityOn: true,
     security: 100,
-    soundOn: true,
-    sound: 400,
+    soundOn: false,
+    sound: 600,
     gearOn: false,
     gear: 50,
     photo: 0,
     // Marketing
-    ads: 60,
+    ads: 80,
     poster: 75,
     printing: 0,
     // Other
@@ -104,6 +104,9 @@
     custom: [],               // [{ name, amount }]
     otherIncome: 0
   };
+
+  // Ticket count the slider starts at for the default scenario.
+  var DEFAULT_N = 105;
 
   var ENUMS = {
     taxMode: ["included", "ontop"],
@@ -490,6 +493,7 @@
 
   return {
     DEFAULTS: DEFAULTS,
+    DEFAULT_N: DEFAULT_N,
     ENUMS: ENUMS,
     PRESETS: PRESETS,
     sanitize: sanitize,
