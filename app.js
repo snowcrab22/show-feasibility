@@ -1,8 +1,10 @@
-/* 150-Cap Show Feasibility: DOM wiring, charts, state. Depends on window.ShowModel (model.js). */
+/* Show Feasibility: DOM wiring, charts, state, section routing. Depends on window.ShowModel (model.js). */
 (function () {
   "use strict";
   var M = window.ShowModel;
-  var STORE_KEY = "kcplur-show-feasibility-v1";
+  var STORE_KEY = "kcplur-show-feasibility-v1"; // same key and {v, inputs, n} shape as the first version
+  var SECTION_KEY = "kcplur-show-feasibility-section";
+  var SECTION_NAMES = ["overview", "tickets", "venue", "talent", "costs", "share"];
   var SVGNS = "http://www.w3.org/2000/svg";
   var MINUS = "−";
 
@@ -55,48 +57,73 @@
   function signClass(v) { return v >= 0.5 ? "pos" : v <= -0.5 ? "neg" : ""; }
   function statusOf(net) { return Math.abs(net) < 0.5 ? "even" : net > 0 ? "profit" : "loss"; }
   var STATUS_LABEL = { profit: "Profit", loss: "Loss", even: "Break-even" };
+  function priceText(v) { return fmt$(v, { cents: v % 1 !== 0 }); }
+
+  // Platform name as typed, or a neutral fallback for sentences.
+  function platName(inp) { var s = String((inp || state.inputs).ticketPlatform || "").trim(); return s || "the ticketing platform"; }
+  function platLabel(inp) { var s = String((inp || state.inputs).ticketPlatform || "").trim(); return s || "Ticketing platform"; }
+  // Label text may contain {P}; it becomes a span that recompute keeps set to the platform name.
+  function labelNodes(text) {
+    var parts = String(text).split("{P}"), out = [];
+    parts.forEach(function (p, i) {
+      if (i) out.push(el("span", { className: "plat-name" }));
+      if (p) out.push(p);
+    });
+    return out;
+  }
 
   // ---------------------------------------------------------------- input schema
-  var BASIS_HL = [["grossFace", "Gross face (tickets x price)"], ["faceNet", "Face net of sales tax"], ["net", "Our net ticket revenue (after fees and door cut)"]];
+  var BASIS_HL = [["grossFace", "Gross face (tickets x price)"], ["faceNet", "Face net of sales tax"], ["net", "Our net ticket revenue (after fees and venue's cut)"]];
   var START = [["first", "From ticket 1"], ["breakEven", "After break-even"], ["afterN", "After N tickets"]];
 
+  // Input groups by section. host = id of the section's input column.
   var SECTIONS = [
-    { id: "g-tickets", title: "Tickets & sales", fields: [
+    { id: "g-tickets", host: "in-tickets", title: "Capacity & price", fields: [
       { k: "capacity", label: "Venue capacity", type: "int" },
       { k: "comps", label: "Comps / guest list", type: "int", hint: "Count toward attendance, not revenue." },
       { type: "readout", id: "sellable-readout", label: "Sellable tickets" },
-      { k: "onlinePct", label: "Sold online via Eventbrite", type: "pct", hint: "The rest sell at the door." },
+      { k: "price", id: "f-price-tickets", mirror: true, label: "Ticket price", type: "money", hint: "Same as the price in the bar at the top." },
       { k: "doorPrice", toggle: "doorPriceOn", label: "Different price at the door", type: "money",
-        hint: "Door tickets sell at this price; online tickets use the ticket price." },
+        hint: "Door tickets sell at this price; online tickets use the ticket price." }
+    ] },
+    { id: "g-channels", host: "in-tickets", title: "Online and door sales", fields: [
+      { k: "onlinePct", label: "Sold online via {P}", type: "pct", hint: "The rest sell at the door." },
       { k: "doorCashPct", label: "Door sales paid in cash", type: "pct", hint: "Cash has no processing fee." },
       { pair: [
         { k: "doorCardPct", label: "Door card processing", type: "pct", step: 0.1 },
         { k: "doorCardFixed", label: "Plus per card ticket", type: "money", step: 0.01 }
-      ], hint: "Square-style rate on what the door buyer is charged." }
+      ], hint: "Card-reader rate on what the door buyer is charged." }
     ] },
-    { id: "g-tax", title: "Taxes & fees", fields: [
+    { id: "g-tax", host: "in-tickets", title: "Sales tax", fields: [
       { k: "taxOn", label: "Collect sales tax", type: "check" },
       { k: "taxRate", label: "Sales tax rate", type: "pct", step: 0.001, dependsOn: "taxOn",
-        note: "Combined rate for the venue's address. Look it up on the Missouri DOR lookup." },
-      { k: "taxMode", label: "Sales tax is", type: "select", dependsOn: "taxOn", options: [["included", "Included in price"], ["ontop", "Added on top (buyer pays extra)"]] },
-      { k: "ebMode", label: "Eventbrite fees", type: "select", options: [["pass", "Pass fees to buyer"], ["absorb", "Absorb fees (included in price)"]] },
+        note: "Combined rate for the venue's address. In Missouri, look it up on the Department of Revenue rate lookup." },
+      { k: "taxMode", label: "Sales tax is", type: "select", dependsOn: "taxOn", options: [["included", "Included in price"], ["ontop", "Added on top (buyer pays extra)"]] }
+    ] },
+    { id: "g-platform", host: "in-tickets", title: "Ticketing platform", fields: [
+      { k: "ebPreset", label: "Rates preset", type: "select", options: [["eventbrite", "Eventbrite (3.7% + $1.79, 2.9% processing)"], ["custom", "Custom"]],
+        hint: "Picking a preset fills in the rates below. Editing a rate switches to Custom." },
+      { k: "ticketPlatform", label: "Platform name", type: "text" },
+      { k: "ebMode", label: "{P} fees", type: "select", options: [["pass", "Pass fees to buyer"], ["absorb", "Absorb fees (included in price)"]] },
       { pair: [
         { k: "ebServicePct", label: "Service fee", type: "pct", step: 0.1 },
         { k: "ebServiceFixed", label: "Plus per ticket", type: "money", step: 0.01 }
       ] },
       { k: "ebProcPct", label: "Payment processing", type: "pct", step: 0.1,
-        note: "US rates as of Nov 2026: 3.7% + $1.79 per ticket service fee, 2.9% payment processing per order — check Eventbrite's pricing page." }
+        note: "The Eventbrite preset uses its US rates as of Nov 2026. Rates change; check the platform's pricing page." }
     ] },
-    { id: "g-venue", title: "Venue deal", fields: [
-      { k: "doorCutPct", label: "Venue door cut", type: "pct", step: 0.5 },
-      { k: "doorCutBasis", label: "Door cut is taken from", type: "select", options: [
+    { id: "g-venue", host: "in-venue", title: "Venue deal", hint: "Turn on each part the venue charges. The parts add up.", fields: [
+      { k: "doorCutPct", toggle: "doorCutOn", label: "% of door (ticket sales)", type: "pct", step: 0.5 },
+      { k: "doorCutBasis", label: "% of door is taken from", type: "select", dependsOn: "doorCutOn", options: [
         ["afterTax", "Ticket sales after sales tax, before ticketing fees"],
         ["afterTaxFees", "Ticket sales after tax and ticketing fees"],
         ["gross", "Gross face value incl. tax"]
-      ], note: "Confirm with the venue what the 15% is taken from. Applies to online and door tickets." },
-      { k: "venueRental", label: "Venue rental / fee", type: "money", hint: "$0 on a door-cut deal." }
+      ], note: "Confirm with the venue what the percentage is taken from. Applies to online and door tickets." },
+      { k: "venueRental", toggle: "venueRentalOn", label: "Flat rental / fee", type: "money" },
+      { k: "venuePerHead", toggle: "venuePerHeadOn", label: "Per-head fee", type: "money", step: 0.25,
+        hint: "Charged for each person in the room, comps included." }
     ] },
-    { id: "g-hl", title: "Headliner deal", fields: [
+    { id: "g-hl", host: "in-talent", title: "Headliner deal", fields: [
       { k: "hlPreset", label: "Deal preset", type: "select", options: [
         ["flat", "Flat guarantee"], ["pct", "% of ticket sales"], ["perTicket", "$ per ticket"],
         ["flatBackend", "Flat + backend (% of profit after break-even)"],
@@ -117,44 +144,44 @@
       ] },
       { k: "hlBackendPct", toggle: "hlBackendOn", label: "Backend: % of profit after break-even", type: "pct", step: 1 },
       { k: "hlVersus", label: "Versus: pay the greater of the guarantee or the % and per-ticket parts", type: "check",
-        hint: "Backend is still added on top. Starting points apply only to tickets beyond them." },
+        hint: "Backend is still added on top. Starting points apply only to tickets beyond them." }
+    ] },
+    { id: "g-hl-travel", host: "in-talent", title: "Headliner travel & hospitality", fields: [
       { pair: [
         { k: "hlTravel", label: "Travel / hotel", type: "money" },
         { k: "hlHospitality", label: "Hospitality / rider", type: "money" }
       ] }
     ] },
-    { id: "g-lineup", title: "Lineup", fields: [
+    { id: "g-lineup", host: "in-talent", title: "Support & VJ", fields: [
       { pair: [
         { k: "supportSlots", label: "Supporting slots", type: "int" },
         { k: "supportPrice", label: "Price per slot", type: "money" }
       ] },
       { k: "vj", toggle: "vjOn", label: "VJ", type: "money" }
-    ] },
-    { id: "g-prod", title: "Production", fields: [
-      { k: "security", toggle: "securityOn", label: "Contracted security (flat)", type: "money" },
-      { k: "sound", toggle: "soundOn", label: "Sound rental", type: "money" },
-      { k: "gear", toggle: "gearOn", label: "Additional deck / gear", type: "money" },
-      { k: "photo", label: "Photo / video", type: "money" }
-    ] },
-    { id: "g-mkt", title: "Marketing", fields: [
-      { k: "ads", label: "Advertising budget", type: "money" },
-      { pair: [
-        { k: "poster", label: "Poster design", type: "money" },
-        { k: "printing", label: "Printing", type: "money" }
-      ] }
-    ] },
-    { id: "g-other", title: "Other", fields: [
-      { k: "ascap", toggle: "ascapOn", label: "PRO licensing: ASCAP", type: "money" },
-      { k: "bmi", toggle: "bmiOn", label: "PRO licensing: BMI", type: "money",
-        note: "Usually the venue's license; turn on if the venue requires promoter coverage." },
-      { k: "insurance", toggle: "insuranceOn", label: "Event insurance", type: "money", note: "Typical one-night event policy quote." },
-      { k: "contingencyPct", label: "Contingency", type: "pct", step: 1, hint: "% of all other costs, not counting headliner %, per-ticket, versus or backend pay." },
-      { type: "custom" },
-      { k: "otherIncome", label: "Other income (merch, sponsor)", type: "money" }
     ] }
   ];
 
-  var controls = {}; // key -> input element
+  // Cost ledger groups (Costs section). Each row is an editable input; subtotals are filled by renderCosts.
+  var LEDGER = [
+    { id: "production", title: "Production", rows: [
+      { k: "security", toggle: "securityOn", label: "Contracted security (flat)" },
+      { k: "sound", toggle: "soundOn", label: "Sound rental" },
+      { k: "gear", toggle: "gearOn", label: "Additional deck / gear" },
+      { k: "photo", label: "Photo / video" }
+    ] },
+    { id: "marketing", title: "Marketing", rows: [
+      { k: "ads", label: "Advertising budget" },
+      { k: "poster", label: "Poster design" },
+      { k: "printing", label: "Printing" }
+    ] },
+    { id: "licensing", title: "Licensing & insurance", rows: [
+      { k: "ascap", toggle: "ascapOn", label: "PRO licensing: ASCAP" },
+      { k: "bmi", toggle: "bmiOn", label: "PRO licensing: BMI", note: "Usually the venue's license; turn on if the venue requires promoter coverage." },
+      { k: "insurance", toggle: "insuranceOn", label: "Event insurance", note: "Typical one-night event policy quote." }
+    ] }
+  ];
+
+  var controls = {}; // key -> primary input element (mirrors share the key via data-k)
   var fieldRows = []; // { row, dependsOn, showIf }
 
   function unitWrap(input, type) {
@@ -163,13 +190,15 @@
     return el("div", { className: "input-wrap" }, [input]);
   }
   function makeInput(f) {
-    var id = "f-" + f.k;
+    var id = f.id || "f-" + f.k;
     var input;
     if (f.type === "select") {
       input = el("select", { id: id, dataset: { k: f.k } });
       f.options.forEach(function (o) { input.appendChild(el("option", { value: o[0], text: o[1] })); });
     } else if (f.type === "check") {
       input = el("input", { type: "checkbox", id: id, dataset: { k: f.k } });
+    } else if (f.type === "text") {
+      input = el("input", { type: "text", id: id, dataset: { k: f.k, kind: "text" }, autocomplete: "off", spellcheck: "false" });
     } else {
       input = el("input", {
         type: "number", id: id, dataset: { k: f.k }, min: "0",
@@ -177,13 +206,13 @@
         inputmode: f.type === "int" ? "numeric" : "decimal"
       });
     }
-    controls[f.k] = input;
+    if (!f.mirror) controls[f.k] = input;
     return input;
   }
   function describe(input, f, row) {
-    var ids = [];
-    if (f.hint) { var h = el("p", { className: "hint", id: "f-" + f.k + "-hint", text: f.hint }); row.appendChild(h); ids.push(h.id); }
-    if (f.note) { var n = el("p", { className: "note", id: "f-" + f.k + "-note", text: f.note }); row.appendChild(n); ids.push(n.id); }
+    var ids = [], base = input.id;
+    if (f.hint) { var h = el("p", { className: "hint", id: base + "-hint", text: f.hint }); row.appendChild(h); ids.push(h.id); }
+    if (f.note) { var n = el("p", { className: "note", id: base + "-note", text: f.note }); row.appendChild(n); ids.push(n.id); }
     if (ids.length) input.setAttribute("aria-describedby", ids.join(" "));
   }
   function buildField(f) {
@@ -192,7 +221,7 @@
       var grid = el("div", { className: "pair" });
       f.pair.forEach(function (p) {
         var inp = makeInput(p);
-        grid.appendChild(el("div", { className: "field" }, [el("label", { "for": inp.id, text: p.label }), unitWrap(inp, p.type)]));
+        grid.appendChild(el("div", { className: "field" }, [el("label", { "for": inp.id }, labelNodes(p.label)), unitWrap(inp, p.type)]));
       });
       wrap.appendChild(grid);
       if (f.hint) wrap.appendChild(el("p", { className: "hint", text: f.hint }));
@@ -209,12 +238,11 @@
         el("span", { className: "num", id: f.id, style: "font-weight:600" })
       ]);
     }
-    if (f.type === "custom") return buildCustomBlock();
 
     var row;
     if (f.type === "check") {
       var cb = makeInput(f);
-      row = el("div", { className: "field" }, [el("label", { className: "check", "for": cb.id }, [cb, f.label])]);
+      row = el("div", { className: "field" }, [el("label", { className: "check", "for": cb.id }, [cb].concat(labelNodes(f.label)))]);
       describe(cb, f, row);
     } else if (f.toggle) {
       var tg = makeInput({ k: f.toggle, type: "check" });
@@ -222,7 +250,7 @@
       var amtLabel = el("label", { className: "sr-only", "for": amt.id, text: f.label + " amount" });
       row = el("div", { className: "field" }, [
         el("div", { className: "toggle-row" }, [
-          el("label", { className: "check", "for": tg.id }, [tg, f.label]),
+          el("label", { className: "check", "for": tg.id }, [tg].concat(labelNodes(f.label))),
           el("div", { className: "row-amount" }, [amtLabel, unitWrap(amt, f.type)])
         ])
       ]);
@@ -230,21 +258,13 @@
       fieldRows.push({ row: row, dependsOn: f.toggle });
     } else {
       var inp = makeInput(f);
-      row = el("div", { className: "field" }, [el("label", { "for": inp.id, text: f.label }), f.type === "select" ? inp : unitWrap(inp, f.type)]);
+      row = el("div", { className: "field" }, [el("label", { "for": inp.id }, labelNodes(f.label)), f.type === "select" ? inp : unitWrap(inp, f.type)]);
       describe(inp, f, row);
     }
     if (f.dependsOn || f.showIf) fieldRows.push({ row: row, dependsOn: f.dependsOn, showIf: f.showIf });
     return row;
   }
 
-  function buildCustomBlock() {
-    var box = el("div", { className: "field" }, [
-      el("span", { className: "flabel", text: "Custom cost lines" }),
-      el("div", { className: "custom-list", id: "custom-list" }),
-      el("div", {}, [el("button", { type: "button", className: "small", id: "btn-add-custom", text: "Add cost line" })])
-    ]);
-    return box;
-  }
   function renderCustomRows() {
     var list = $("custom-list");
     list.textContent = "";
@@ -263,23 +283,92 @@
     // keep grid columns: the sr-only labels are absolutely positioned and take no cell
   }
 
-  function buildInputs() {
-    var host = $("inputs");
-    SECTIONS.forEach(function (s) {
-      var body = el("div", { className: "group-body" });
-      s.fields.forEach(function (f) { body.appendChild(buildField(f)); });
-      host.appendChild(el("details", { className: "group", id: s.id, open: true }, [el("summary", { text: s.title }), body]));
+  // ---------------------------------------------------------------- cost ledger
+  function lrow(cls, kids) { return el("div", { className: "lrow" + (cls ? " " + cls : "") }, kids); }
+  function lval(id, text) { return el("span", { className: "lval", id: id, text: text || "" }); }
+  function lgroup(title, link, kids, subId, subLabel) {
+    var head = el("div", { className: "lgroup-head" }, [el("h4", { text: title })]);
+    if (link) head.appendChild(el("a", { href: "#" + link, text: "Edit in " + link.charAt(0).toUpperCase() + link.slice(1) }));
+    var g = el("div", { className: "lgroup" }, [head].concat(kids));
+    if (subId) g.appendChild(lrow("subtotal", [el("span", { text: subLabel || title + " subtotal" }), lval(subId)]));
+    return g;
+  }
+  function ledgerInputRow(f) {
+    var amt = makeInput({ k: f.k, type: "money" });
+    var row;
+    if (f.toggle) {
+      var tg = makeInput({ k: f.toggle, type: "check" });
+      row = lrow("", [
+        el("label", { className: "check lname", "for": tg.id }, [tg, f.label]),
+        el("div", {}, [el("label", { className: "sr-only", "for": amt.id, text: f.label + " amount" }), unitWrap(amt, "money")])
+      ]);
+      fieldRows.push({ row: row, dependsOn: f.toggle });
+    } else {
+      row = lrow("", [el("label", { className: "lname", "for": amt.id, text: f.label }), unitWrap(amt, "money")]);
+    }
+    if (f.note) {
+      var n = el("p", { className: "note", id: amt.id + "-note", text: f.note });
+      amt.setAttribute("aria-describedby", n.id);
+      return el("div", { style: "display:grid;gap:4px" }, [row, n]);
+    }
+    return row;
+  }
+  function buildLedger() {
+    var host = $("ledger");
+    host.appendChild(lgroup("Talent", "talent", [
+      lrow("sub", [el("span", { text: "Headliner pay" }), lval("led-hl-pay")]),
+      lrow("sub", [el("span", { text: "Headliner travel / hotel and hospitality" }), lval("led-hl-extra")]),
+      lrow("sub", [el("span", { id: "led-support-label", text: "Supporting artists" }), lval("led-support")]),
+      lrow("sub", [el("span", { text: "VJ" }), lval("led-vj")])
+    ], "led-talent"));
+    host.appendChild(lgroup("Venue", "venue", [
+      lrow("sub", [el("span", { text: "Flat rental / fee" }), lval("led-venue-rental")]),
+      lrow("sub", [el("span", { id: "led-venue-taken-label", text: "% of door and per-head fee (already out of ticket revenue, not counted again)" }), lval("led-venue-taken")])
+    ], "led-venue", "Venue: counted in total costs (rental)"));
+    LEDGER.forEach(function (g) {
+      host.appendChild(lgroup(g.title, null, g.rows.map(ledgerInputRow), "led-" + g.id));
     });
-    controls.price = $("f-price");
-    controls.venueName = $("f-venueName");
+    host.appendChild(lgroup("Custom cost lines", null, [
+      el("div", { className: "custom-list", id: "custom-list" }),
+      el("div", {}, [el("button", { type: "button", className: "small", id: "btn-add-custom", text: "Add cost line" })])
+    ], "led-custom"));
+
+    var cp = makeInput({ k: "contingencyPct", type: "pct", step: 1 });
+    var hint = el("p", { className: "hint", id: "f-contingencyPct-hint", text: "% of all other costs, not counting headliner %, per-ticket, versus or backend pay, the venue's % of door or the per-head fee." });
+    cp.setAttribute("aria-describedby", hint.id);
+    host.appendChild(el("div", { className: "lgroup" }, [
+      lrow("contingency", [el("label", { "for": cp.id, className: "lname", text: "Contingency" }), unitWrap(cp, "pct"), lval("led-contingency")]),
+      hint,
+      lrow("total grand", [el("span", { text: "Total costs" }), lval("led-total")])
+    ]));
+
+    var oi = makeInput({ k: "otherIncome", type: "money" });
+    host.appendChild(el("div", { className: "lsummary" }, [
+      lrow("", [el("span", {}, [el("a", { href: "#tickets", text: "Net ticket revenue" }), " (after tax, fees and the venue's cut)"]), lval("led-nettix")]),
+      lrow("", [el("label", { "for": oi.id, className: "lname", text: "Other income (merch, sponsor)" }), unitWrap(oi, "money")]),
+      lrow("", [el("span", { text: "Minus total costs" }), lval("led-total-2")]),
+      lrow("total grand", [el("span", { id: "led-net-label", text: "Net" }), lval("led-net")])
+    ]));
   }
 
-  // Write state into every control (load, reset, preset). Never called on plain typing.
+  function buildInputs() {
+    SECTIONS.forEach(function (s) {
+      var body = el("div", { className: "group-body" });
+      if (s.hint) body.appendChild(el("p", { className: "hint", text: s.hint }));
+      s.fields.forEach(function (f) { body.appendChild(buildField(f)); });
+      $(s.host).appendChild(el("div", { className: "card group-card", id: s.id }, [el("h3", { text: s.title }), body]));
+    });
+    buildLedger();
+    controls.price = $("f-price");
+    controls.venueName = $("f-venueName");
+    controls.showName = $("f-showName");
+  }
+
+  // Write state into every control, mirrors included (load, reset, preset). Never called on plain typing.
   function syncControls(skip) {
-    Object.keys(controls).forEach(function (k) {
-      var c = controls[k];
+    document.querySelectorAll("[data-k]").forEach(function (c) {
       if (c === skip) return;
-      var v = state.inputs[k];
+      var v = state.inputs[c.dataset.k];
       if (c.type === "checkbox") c.checked = !!v;
       else c.value = v;
     });
@@ -296,6 +385,7 @@
 
   // ---------------------------------------------------------------- events
   var HL_TOGGLES = ["hlGuaranteeOn", "hlPctOn", "hlPerTicketOn", "hlBackendOn", "hlVersus", "hlPctStart", "hlPerTicketStart"];
+  var PLATFORM_RATES = ["ebServicePct", "ebServiceFixed", "ebProcPct"];
 
   function onControl(e) {
     var t = e.target;
@@ -311,6 +401,11 @@
     if (t.type === "checkbox") state.inputs[k] = t.checked;
     else if (t.tagName === "SELECT" || t.dataset.kind === "text") state.inputs[k] = t.value;
     else state.inputs[k] = Math.max(0, parseNum(t.value));
+    // Keep any mirror of this key (ticket price lives in the bar and in Tickets & fees) in step.
+    document.querySelectorAll('[data-k="' + k + '"]').forEach(function (c) {
+      if (c === t) return;
+      if (c.type === "checkbox") c.checked = t.checked; else c.value = t.value;
+    });
 
     if (k === "hlPreset" && M.PRESETS[t.value]) {
       Object.assign(state.inputs, M.PRESETS[t.value]);
@@ -318,6 +413,12 @@
     } else if (HL_TOGGLES.indexOf(k) >= 0) {
       state.inputs.hlPreset = M.detectPreset(state.inputs);
       controls.hlPreset.value = state.inputs.hlPreset;
+    } else if (k === "ebPreset" && M.PLATFORM_PRESETS[t.value]) {
+      Object.assign(state.inputs, M.PLATFORM_PRESETS[t.value]);
+      syncControls(t);
+    } else if (PLATFORM_RATES.indexOf(k) >= 0) {
+      state.inputs.ebPreset = M.detectPlatform(state.inputs);
+      controls.ebPreset.value = state.inputs.ebPreset;
     }
     recompute();
   }
@@ -328,6 +429,54 @@
     recompute();
   }
 
+  // ---------------------------------------------------------------- sections (plain location.hash names)
+  var current = null;
+  function sectionFromHash() {
+    var h = (location.hash || "").replace(/^#/, "");
+    return SECTION_NAMES.indexOf(h) >= 0 ? h : null;
+  }
+  function showSection(name, opts) {
+    opts = opts || {};
+    if (SECTION_NAMES.indexOf(name) < 0) name = "overview";
+    var changed = current !== name;
+    current = name;
+    SECTION_NAMES.forEach(function (s) { $("sec-" + s).hidden = s !== name; });
+    document.querySelectorAll(".secnav a").forEach(function (a) {
+      if (a.dataset.sec === name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    });
+    var navA = document.querySelector('.secnav a[data-sec="' + name + '"]');
+    if (navA && navA.scrollIntoView && window.matchMedia("(max-width: 900px)").matches) {
+      try { navA.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) { /* old browsers */ }
+    }
+    try { localStorage.setItem(SECTION_KEY, name); } catch (e) { /* storage unavailable */ }
+    hideTip();
+    if (name === "overview" && last) { renderChart(last); renderMoneyBar(last.r); }
+    // If the page is scrolled past the nav, bring the top of the new section under the sticky bar.
+    if (changed && !opts.initial) {
+      var nav = $("secnav"), covered = $("verdict").offsetHeight;
+      if (getComputedStyle(nav).position === "sticky") covered += nav.offsetHeight;
+      var target = $("sec-" + name).getBoundingClientRect().top + window.scrollY - covered - 12;
+      if (window.scrollY > target) window.scrollTo(0, Math.max(0, target));
+    }
+  }
+  function initSections() {
+    var name = sectionFromHash();
+    if (!name) {
+      try { name = localStorage.getItem(SECTION_KEY); } catch (e) { name = null; }
+      if (SECTION_NAMES.indexOf(name) < 0) name = "overview";
+      try { history.replaceState(null, "", "#" + name); } catch (e) { /* file:// or old browsers */ }
+    }
+    showSection(name, { initial: true });
+    window.addEventListener("hashchange", function () { showSection(sectionFromHash() || "overview"); });
+  }
+  // The secnav sits under the verdict bar on desktop; keep its sticky offset equal to the bar's height.
+  function trackVerdictHeight() {
+    function set() { document.documentElement.style.setProperty("--verdict-h", $("verdict").offsetHeight + "px"); }
+    set();
+    if (window.ResizeObserver) new ResizeObserver(set).observe($("verdict"));
+    else window.addEventListener("resize", set);
+  }
+
   function wire() {
     document.addEventListener("input", function (e) {
       if (e.target.id === "n-slider" || e.target.id === "n-input") {
@@ -335,7 +484,7 @@
         recompute(e.target);
         return;
       }
-      if (e.target.closest("#inputs, .lever-price, .venue-field")) onControl(e);
+      if (e.target.dataset && (e.target.dataset.k || e.target.dataset.ci !== undefined)) onControl(e);
     });
     document.addEventListener("change", function (e) {
       if (e.target.tagName === "SELECT" || e.target.type === "checkbox") return; // handled on input
@@ -347,7 +496,7 @@
         setN(S * (+b.dataset.q) / 100);
       });
     });
-    $("inputs").addEventListener("click", function (e) {
+    $("ledger").addEventListener("click", function (e) {
       var t = e.target;
       if (t.id === "btn-add-custom") {
         state.inputs.custom.push({ name: "", amount: 0 });
@@ -364,12 +513,8 @@
         recompute();
       }
     });
-    ["btn-copy-summary", "btn-copy-summary-top"].forEach(function (id) {
-      $(id).addEventListener("click", function () { copyText(summaryText(), "Summary copied. Paste it in Discord or a text."); });
-    });
-    ["btn-copy-code", "btn-copy-code-top"].forEach(function (id) {
-      $(id).addEventListener("click", function () { copyText(encodeScenario(), "Scenario code copied. Whoever loads it sees this exact scenario."); });
-    });
+    $("btn-copy-summary").addEventListener("click", function () { copyText(summaryText(), "Summary copied. Paste it in Discord or a text."); });
+    $("btn-copy-code").addEventListener("click", function () { copyText(encodeScenario(), "Scenario code copied. Whoever loads it sees this exact scenario."); });
     $("btn-load").addEventListener("click", loadFromBox);
     var armed = null;
     $("btn-reset").addEventListener("click", function () {
@@ -389,10 +534,10 @@
       showMsg("Reset to the default scenario.", "ok");
     });
     if (window.ResizeObserver) {
-      var ro = new ResizeObserver(function () { if (last) { renderChart(last); renderMoneyBar(last.r); } });
+      var ro = new ResizeObserver(function () { if (last && current === "overview") { renderChart(last); renderMoneyBar(last.r); } });
       ro.observe($("chart-wrap"));
     } else {
-      window.addEventListener("resize", function () { if (last) { renderChart(last); renderMoneyBar(last.r); } });
+      window.addEventListener("resize", function () { if (last && current === "overview") { renderChart(last); renderMoneyBar(last.r); } });
     }
     window.addEventListener("scroll", hideTip, { passive: true });
   }
@@ -428,6 +573,8 @@
     for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new TextDecoder().decode(bytes);
   }
+  // Same {v: 1, inputs, n} shape as the first version, so old and new codes load in both directions
+  // (an older page simply ignores the keys it does not know).
   function encodeScenario() {
     return b64encodeUtf8(JSON.stringify({ v: 1, inputs: M.sanitize(state.inputs), n: state.n }));
   }
@@ -461,25 +608,34 @@
     } catch (e) { /* ignore bad or missing storage */ }
   }
 
+  function venueDescription(inp, ascii) {
+    var parts = [];
+    if (inp.doorCutOn) parts.push(inp.doorCutPct + "% of " + CUT_SHORT[inp.doorCutBasis]);
+    if (inp.venueRentalOn) parts.push(fmt$(inp.venueRental, { ascii: ascii }) + " rental");
+    if (inp.venuePerHeadOn) parts.push(fmt$(inp.venuePerHead, { cents: inp.venuePerHead % 1 !== 0 }) + " per head");
+    return parts.join(" + ") || "nothing";
+  }
   function summaryText() {
     if (!last) return "";
     var b = last, inp = b.inp, r = b.r, S = r.sellable;
     var A = { ascii: true };
     var lines = [];
-    lines.push("150-Cap Show Feasibility - " + (inp.venueName || "New venue"));
-    lines.push(r.n + " of " + S + " sellable tickets at " + fmt$(inp.price, { cents: inp.price % 1 !== 0 }) +
-      (inp.doorPriceOn ? " (" + fmt$(inp.doorPrice, { cents: inp.doorPrice % 1 !== 0 }) + " at the door)" : "") +
+    var show = String(inp.showName || "").trim(), venue = String(inp.venueName || "").trim() || "New venue";
+    lines.push("Show Feasibility - " + (show ? show + " at " : "") + venue);
+    lines.push(r.n + " of " + S + " sellable tickets at " + priceText(inp.price) +
+      (inp.doorPriceOn ? " (" + priceText(inp.doorPrice) + " at the door)" : "") +
       " (" + inp.comps + " comps, cap " + inp.capacity + ")");
     lines.push("Net: " + fmt$(r.net, A) + " (" + STATUS_LABEL[statusOf(r.net)].toLowerCase() + ")");
     lines.push("Break-even: " + (b.be === null ? "can't break even at this price, even sold out" : b.be + " tickets (" + fmtPct(b.be / Math.max(1, S)) + " of sellable)"));
     lines.push("Break-even price at " + r.n + " sold: " + (b.bePrice === null ? "none" : fmt$(b.bePrice, { cents: true })));
     lines.push("Headliner: " + fmt$(r.headliner.pay, A) + " (" + hlDescription(inp) + ")");
+    lines.push("Venue takes: " + fmt$(r.venue.total, A) + " (" + venueDescription(inp, true) + ")");
     lines.push("Buyer pays: " + fmt$(r.buyerPaysOnline, { cents: true }) + " online, " + fmt$(r.buyerPaysDoor, { cents: true }) + " at the door");
     lines.push("Net ticket revenue " + fmt$(r.netTicketRevenue, A) + " | Total costs " + fmt$(r.totalCosts, A) + (r.otherIncome ? " | Other income " + fmt$(r.otherIncome, A) : ""));
     lines.push("At this price: " + b.scen.map(function (s) { return s.pct + "% (" + s.r.n + ") " + fmt$(s.r.net, A); }).join(" | "));
     lines.push("Assumes: " + (inp.taxOn ? "sales tax " + inp.taxRate + "% " + (inp.taxMode === "included" ? "included" : "on top") : "no sales tax") +
-      "; Eventbrite fees " + (inp.ebMode === "pass" ? "passed to buyer" : "absorbed") +
-      "; venue " + inp.doorCutPct + "% of " + CUT_SHORT[inp.doorCutBasis] + "; " + inp.onlinePct + "% online");
+      "; " + platLabel(inp) + " fees " + (inp.ebMode === "pass" ? "passed to buyer" : "absorbed") +
+      "; " + inp.onlinePct + "% online");
     return lines.join("\n");
   }
   var CUT_SHORT = { afterTax: "ticket sales after tax", afterTaxFees: "ticket sales after tax and fees", gross: "gross face incl. tax" };
@@ -534,7 +690,8 @@
     var scen = [25, 50, 75, 90, 100].map(function (p) {
       return { pct: p, r: M.compute(inp, Math.round(S * p / 100), { hlBE: hlBE }) };
     });
-    last = { inp: inp, r: r, be: be, hlBE: hlBE, bePrice: bePrice, sw: sw, scen: scen, S: S };
+    var soldOut = M.compute(inp, S, { hlBE: hlBE });
+    last = { inp: inp, r: r, be: be, hlBE: hlBE, bePrice: bePrice, sw: sw, scen: scen, S: S, soldOut: soldOut };
 
     var slider = $("n-slider"), nIn = $("n-input");
     slider.max = S;
@@ -542,25 +699,70 @@
     if (fromLever !== nIn) nIn.value = state.n;
     nIn.max = S;
     slider.setAttribute("aria-valuetext", state.n + " tickets, " + fmtPct(state.n / Math.max(1, S)) + " of sellable");
-    $("n-context").textContent = fmtPct(state.n / Math.max(1, S)) + " of " + S + " sellable, " + (state.n + inp.comps) + " in the room with comps";
+    $("n-context").textContent = state.n + " tickets: " + fmtPct(state.n / Math.max(1, S)) + " of " + S + " sellable, " + (state.n + inp.comps) + " in the room with comps";
     $("sellable-readout").textContent = S + " (capacity " + inp.capacity + " minus " + inp.comps + " comps)";
-    $("price-hint").textContent = "Buyer pays " + fmt$(r.buyerPaysOnline, { cents: true }) + " online, " + fmt$(r.buyerPaysDoor, { cents: true }) + " at the door";
     document.querySelectorAll(".quick button").forEach(function (b) {
       b.setAttribute("aria-pressed", String(Math.round(S * (+b.dataset.q) / 100) === state.n));
     });
+    var pn = platLabel(inp);
+    document.querySelectorAll(".plat-name").forEach(function (s) { s.textContent = pn; });
 
     applyVisibility();
+    renderVerdict(last);
     renderTiles(last);
-    renderChart(last);
+    if (current === "overview" || !current) { renderChart(last); }
     renderMoney(r);
     renderHeatmap(inp);
     renderScenarios(last);
     renderHeadliner(last);
+    renderTalent(last);
+    renderVenue(last);
     renderPerTicket(r, inp);
     renderTicketMoney(r, inp);
     renderCosts(r, inp);
     renderNotes(inp, last);
+    renderSummaries(last);
     save();
+  }
+
+  // ---------------------------------------------------------------- verdict bar and section summaries
+  function renderVerdict(b) {
+    var r = b.r, st = statusOf(r.net);
+    var v = $("v-net");
+    v.textContent = fmt$(r.net, { plus: true });
+    v.className = "v-value num" + (st === "loss" ? " loss" : "");
+    var nl = $("v-net-label");
+    nl.textContent = "Net";
+    nl.appendChild(el("span", { className: "v-wide", text: " at " + r.n }));
+    var p = $("v-pill");
+    p.dataset.status = st;
+    p.textContent = STATUS_LABEL[st];
+    var bev = $("v-be");
+    bev.textContent = b.be === null ? "None" : String(b.be);
+    if (b.be !== null) bev.appendChild(el("span", { className: "v-wide", text: " tickets" }));
+    bev.title = b.be === null ? "Can't break even at this price, even sold out" : b.be + " tickets";
+  }
+  function talentTotal(r) { return r.headliner.total + r.costs.support + r.costs.vj; }
+  function setNav(name, text, cls) {
+    var n = $("nav-num-" + name);
+    n.textContent = text;
+    n.className = "nav-num" + (cls ? " " + cls : "");
+  }
+  function renderSummaries(b) {
+    var r = b.r, inp = b.inp, n = r.n;
+    $("sum-overview").textContent = "Net " + fmt$(r.net, { plus: true }) + " at " + n + " tickets; " +
+      (b.be === null ? "can't break even at this price, even sold out." : "break-even at " + b.be + " of " + b.S + " tickets.");
+    setNav("overview", fmt$(r.net, { plus: true }), r.net <= -0.5 ? "neg" : "");
+    $("sum-tickets").textContent = n + " of " + b.S + " sellable at " + priceText(inp.price) + "; buyer pays " +
+      fmt$(r.buyerPaysOnline, { cents: true }) + " online, " + fmt$(r.buyerPaysDoor, { cents: true }) + " at the door; we keep " + fmt$(r.netTicketRevenue) + ".";
+    setNav("tickets", fmt$(r.netTicketRevenue) + " kept");
+    $("sum-venue").textContent = "Venue takes " + fmt$(r.venue.total) + " at " + n + " tickets (" + fmt$(b.soldOut.venue.total) + " sold out): " + venueDescription(inp) + ".";
+    setNav("venue", fmt$(r.venue.total));
+    $("sum-talent").textContent = "Talent costs " + fmt$(talentTotal(r)) + " at " + n + " tickets; headliner pay " + fmt$(r.headliner.pay) + ".";
+    setNav("talent", fmt$(talentTotal(r)));
+    $("sum-costs").textContent = "Total costs " + fmt$(r.totalCosts) + " at " + n + " tickets; net " + fmt$(r.net, { plus: true }) + ".";
+    setNav("costs", fmt$(r.totalCosts));
+    $("sum-share").textContent = "Copy a plain-text summary or a scenario code, load a code, or reset.";
   }
 
   // ---------------------------------------------------------------- tiles
@@ -583,7 +785,7 @@
     else host.appendChild(tile("Show break-even", b.be + " tickets", fmtPct(b.be / Math.max(1, S)) + " of " + S + " sellable" + (b.be > r.n ? ", " + (b.be - r.n) + " more than now" : "")));
     var bp = b.bePrice;
     host.appendChild(tile("Break-even price at " + r.n + " sold", bp === null ? "None" : fmt$(bp, { cents: true }),
-      bp === null ? (r.n === 0 ? "No price works with 0 tickets sold" : "Even $1,000 a ticket loses") : (bp <= b.inp.price ? "At or under your " + fmt$(b.inp.price, { cents: b.inp.price % 1 !== 0 }) + " price" : fmt$(bp - b.inp.price, { cents: true }) + " above your price")));
+      bp === null ? (r.n === 0 ? "No price works with 0 tickets sold" : "Even $1,000 a ticket loses") : (bp <= b.inp.price ? "At or under your " + priceText(b.inp.price) + " price" : fmt$(bp - b.inp.price, { cents: true }) + " above your price")));
     var h = r.headliner;
     var hsub = [];
     if (h.versus) {
@@ -595,7 +797,7 @@
     }
     if (h.backend) hsub.push("backend " + fmt$(h.backend));
     host.appendChild(tile("Headliner payout", fmt$(h.pay), (h.versus ? "Versus: " : "") + (hsub.join(", ") || "nothing owed at this count")));
-    host.appendChild(tile("Buyer pays at checkout (online)", fmt$(r.buyerPaysOnline, { cents: true }), "Door " + fmt$(r.buyerPaysDoor, { cents: true }) + "; fees " + (b.inp.ebMode === "pass" ? "passed to buyer" : "absorbed by us")));
+    host.appendChild(tile("Buyer pays at checkout (online)", fmt$(r.buyerPaysOnline, { cents: true }), "Door " + fmt$(r.buyerPaysDoor, { cents: true }) + "; " + platLabel(b.inp) + " fees " + (b.inp.ebMode === "pass" ? "passed to buyer" : "absorbed by us")));
   }
 
   // ---------------------------------------------------------------- line chart
@@ -716,9 +918,9 @@
   // ---------------------------------------------------------------- money
   var CATS = [
     { k: "tax", label: "Sales tax (to the state)", color: "var(--seg-tax)", text: "var(--seg-tax-text)" },
-    { k: "ebFees", label: "Eventbrite fees", color: "var(--s1)" },
+    { k: "ebFees", label: "Ticketing platform fees", platform: true, color: "var(--s1)" },
     { k: "doorProc", label: "Door card processing", color: "var(--s2)" },
-    { k: "doorCut", label: "Venue door cut", color: "var(--s3)" },
+    { k: "venue", label: "Venue (% of door, rental, per-head)", color: "var(--s3)" },
     { k: "headliner", label: "Headliner (pay, travel, rider)", color: "var(--s4)", text: "#0b0b0b" },
     { k: "supportVj", label: "Support + VJ", color: "var(--s5)" },
     { k: "production", label: "Production (sound, security, gear)", color: "var(--s6)" },
@@ -726,6 +928,7 @@
     { k: "other", label: "Other costs and contingency", color: "var(--s8)" },
     { k: "profit", label: "Profit (ours)", color: "var(--seg-profit)", text: "var(--seg-profit-text)" }
   ];
+  function catLabel(c) { return c.platform ? platLabel() + " fees" : c.label; }
   function renderMoney(r) {
     var inflow = r.inflow, loss = r.money.loss;
     $("money-sub").textContent = "At " + r.n + " tickets: buyers paid " + fmt$(r.buyersPaid) + (r.otherIncome ? " plus " + fmt$(r.otherIncome) + " other income" : "");
@@ -734,7 +937,7 @@
     lg.textContent = "";
     CATS.forEach(function (c) {
       if (c.k === "profit" && loss > 0) return;
-      lg.appendChild(el("span", {}, [el("i", { style: "background:" + c.color }), c.label]));
+      lg.appendChild(el("span", {}, [el("i", { style: "background:" + c.color }), catLabel(c)]));
     });
     var sf = $("money-shortfall");
     if (loss > 0.005) {
@@ -749,7 +952,7 @@
       if (c.k === "profit" && loss > 0) return;
       var v = r.money[c.k];
       tb.appendChild(el("tr", {}, [
-        el("td", {}, [el("span", { className: "sw", style: "background:" + c.color, "aria-hidden": "true" }), c.label]),
+        el("td", {}, [el("span", { className: "sw", style: "background:" + c.color, "aria-hidden": "true" }), catLabel(c)]),
         el("td", { className: "n", text: fmt$(v, { cents: true }) }),
         el("td", { className: "n", text: whole > 0 ? fmtPct(v / whole, 1) : "0%" }),
         el("td", { className: "n", text: fmt$(r.perTicket[c.k], { cents: true }) })
@@ -796,11 +999,11 @@
       var fits = !underMark && px >= lbl.length * 7.5 + 12;
       var seg = el("div", {
         className: "seg", tabindex: "0", role: "img",
-        "aria-label": p.c.label + ": " + fmt$(p.v, { cents: true }) + ", " + fmtPct(share, 1),
+        "aria-label": catLabel(p.c) + ": " + fmt$(p.v, { cents: true }) + ", " + fmtPct(share, 1),
         style: "flex:" + share + " 1 0;background:" + p.c.color + ";color:" + (p.c.text || "#ffffff"),
         text: fits ? lbl : ""
       });
-      var rows = [{ text: fmt$(p.v, { cents: true }), strong: true }, { text: p.c.label + ", " + fmtPct(share, 1) }];
+      var rows = [{ text: fmt$(p.v, { cents: true }), strong: true }, { text: catLabel(p.c) + ", " + fmtPct(share, 1) }];
       seg.addEventListener("pointermove", function (e) { showTip(rows, e.clientX, e.clientY); });
       seg.addEventListener("pointerleave", hideTip);
       seg.addEventListener("focus", function () { tipAtElement(seg, rows); });
@@ -876,7 +1079,7 @@
   function renderScenarios(b) {
     var tb = $("scenarios").tBodies[0];
     tb.textContent = "";
-    $("scen-sub").textContent = "At " + fmt$(b.inp.price, { cents: b.inp.price % 1 !== 0 }) + " a ticket";
+    $("scen-sub").textContent = "At " + priceText(b.inp.price) + " a ticket";
     b.scen.forEach(function (s) {
       var r = s.r;
       tb.appendChild(el("tr", { className: r.n === state.n ? "current" : "" }, [
@@ -894,7 +1097,7 @@
     tb.textContent = "";
     $("hl-sub").textContent = "At " + b.r.n + " tickets";
     var C = { cents: true };
-    addRow(tb, "Deal", hlDescription(inp));
+    addRow(tb, "Deal", hlDescription(inp), { vcls: "wrap" });
     addRow(tb, "Guarantee", inp.hlGuaranteeOn ? fmt$(h.guarantee, C) : "off", { vcls: inp.hlGuaranteeOn ? "" : "off" });
     if (inp.hlPctOn) addRow(tb, inp.hlPct + "% of " + HL_BASIS_SHORT[inp.hlPctBasis] + (h.pctThreshold > 0 ? " beyond " + (isFinite(h.pctThreshold) ? h.pctThreshold : "break-even") + " tickets" : ""), fmt$(h.pctPart, C));
     if (inp.hlPerTicketOn) addRow(tb, fmt$(inp.hlPerTicket, C) + " per ticket" + (h.perTicketThreshold > 0 ? " beyond " + (isFinite(h.perTicketThreshold) ? h.perTicketThreshold : "break-even") + " tickets" : ""), fmt$(h.perTicketPart, C));
@@ -906,15 +1109,42 @@
     addRow(tb, "Headliner all-in", fmt$(h.total, C), { cls: "total" });
     addRow(tb, "Headliner break-even (guarantee and all other costs, no bonus parts)", b.hlBE === null ? "never" : b.hlBE + " tickets");
   }
+  function renderTalent(b) {
+    var r = b.r, inp = b.inp, L = r.costs, tb = $("talent-table").tBodies[0], C = { cents: true };
+    tb.textContent = "";
+    $("talent-sub").textContent = "At " + r.n + " tickets";
+    addRow(tb, "Headliner all-in (pay, travel, rider)", fmt$(r.headliner.total, C));
+    addRow(tb, "Supporting artists (" + inp.supportSlots + " x " + fmt$(inp.supportPrice) + ")", fmt$(L.support, C));
+    if (inp.vjOn) addRow(tb, "VJ", fmt$(L.vj, C)); else addRow(tb, "VJ", "off", { vcls: "off" });
+    addRow(tb, "Total talent cost", fmt$(talentTotal(r), C), { cls: "total" });
+  }
+  function renderVenue(b) {
+    var r = b.r, so = b.soldOut, inp = b.inp, tb = $("venue-table").tBodies[0], C = { cents: true };
+    tb.textContent = "";
+    $("venue-sub").textContent = venueDescription(inp);
+    $("venue-col-now").textContent = "At " + r.n + " tickets";
+    $("venue-col-out").textContent = "Sold out (" + b.S + ")";
+    function row(label, on, a, c, cls) {
+      tb.appendChild(el("tr", { className: cls || "" }, [
+        el("td", { text: label }),
+        el("td", { className: "n" + (on ? "" : " off"), text: on ? fmt$(a, C) : "off" }),
+        el("td", { className: "n" + (on ? "" : " off"), text: on ? fmt$(c, C) : "off" })
+      ]));
+    }
+    row(inp.doorCutPct + "% of " + CUT_SHORT[inp.doorCutBasis], inp.doorCutOn, r.venue.doorCut, so.venue.doorCut);
+    row("Flat rental / fee", inp.venueRentalOn, r.venue.rental, so.venue.rental);
+    row(fmt$(inp.venuePerHead, C) + " per head (" + r.attending + " / " + so.attending + " in the room)", inp.venuePerHeadOn, r.venue.perHead, so.venue.perHead);
+    row("Venue takes", true, r.venue.total, so.venue.total, "total");
+  }
   function renderPerTicket(r, inp) {
-    var p = r.perTicketPrices, tb = $("pt-table").tBodies[0], C = { cents: true };
+    var p = r.perTicketPrices, tb = $("pt-table").tBodies[0], C = { cents: true }, pn = platLabel(inp);
     tb.textContent = "";
     $("pt-sub").textContent = fmt$(inp.price, C) + " face price" + (inp.doorPriceOn ? ", " + fmt$(p.doorPrice, C) + " at the door" : "");
     addRow(tb, "Ours after sales tax", fmt$(p.faceNet, C));
     addRow(tb, "Sales tax " + (inp.taxOn ? (inp.taxMode === "included" ? "(inside the price)" : "(added on top)") : "(off)"), fmt$(p.tax, C));
-    addRow(tb, "Eventbrite service fee", fmt$(p.ebService, C), { cls: "sub" });
-    addRow(tb, "Eventbrite processing", fmt$(p.ebProc, C), { cls: "sub" });
-    addRow(tb, "Eventbrite fees " + (inp.ebMode === "pass" ? "paid by the buyer" : "absorbed by us"), fmt$(p.ebFee, C));
+    addRow(tb, pn + " service fee", fmt$(p.ebService, C), { cls: "sub" });
+    addRow(tb, pn + " processing", fmt$(p.ebProc, C), { cls: "sub" });
+    addRow(tb, pn + " fees " + (inp.ebMode === "pass" ? "paid by the buyer" : "absorbed by us"), fmt$(p.ebFee, C));
     addRow(tb, "Buyer pays online", fmt$(p.onlineBuyer, C), { cls: "total" });
     if (inp.doorPriceOn) {
       addRow(tb, "Door face price", fmt$(p.doorPrice, C));
@@ -924,78 +1154,88 @@
     addRow(tb, "Door card fee (card buyers)", fmt$(p.doorCardProc, C));
     addRow(tb, "Buyer pays at the door", fmt$(p.doorBuyer, C), { cls: "total" });
     var keep = r.n ? r.netTicketRevenue / r.n : 0;
-    addRow(tb, "We keep per ticket sold, after fees and door cut", r.n ? fmt$(keep, C) : "n/a");
+    addRow(tb, "We keep per ticket sold, after fees and the venue's cut", r.n ? fmt$(keep, C) : "n/a");
   }
   function renderTicketMoney(r, inp) {
-    var tb = $("tm-table").tBodies[0], C = { cents: true }, c = r.counts;
+    var tb = $("tm-table").tBodies[0], C = { cents: true }, c = r.counts, pn = platLabel(inp);
     tb.textContent = "";
     $("tm-sub").textContent = r.n + " sold + " + inp.comps + " comps = " + (r.n + inp.comps) + " attending";
-    addRow(tb, "Online (Eventbrite)", c.online + " tickets");
+    addRow(tb, "Online (" + pn + ")", c.online + " tickets");
     addRow(tb, "Door", c.door + " tickets (" + c.doorCash + " cash, " + c.doorCard + " card)");
     addRow(tb, "Buyers paid online", fmt$(r.buyersPaidOnline, C), { cls: "sub" });
     addRow(tb, "Buyers paid at the door", fmt$(r.buyersPaidDoor, C), { cls: "sub" });
     addRow(tb, "Everything buyers paid", fmt$(r.buyersPaid, C), { cls: "total" });
     addRow(tb, "Sales tax collected (to the state)", MINUS + fmt$(r.tax, C));
-    addRow(tb, "Eventbrite fees paid by buyers", MINUS + fmt$(r.eventbrite.passed, C));
+    addRow(tb, pn + " fees paid by buyers", MINUS + fmt$(r.eventbrite.passed, C));
     addRow(tb, "Ticket sales after tax", fmt$(r.faceNet, C), { cls: "total" });
-    addRow(tb, "Eventbrite fees we absorb", MINUS + fmt$(r.eventbrite.absorbed, C));
+    addRow(tb, pn + " fees we absorb", MINUS + fmt$(r.eventbrite.absorbed, C));
     addRow(tb, "Door card processing", MINUS + fmt$(r.doorProc, C));
-    addRow(tb, "Venue door cut (" + inp.doorCutPct + "% of " + fmt$(r.doorCutBasis) + ")", MINUS + fmt$(r.doorCut, C));
+    if (inp.doorCutOn) addRow(tb, "Venue " + inp.doorCutPct + "% of door (of " + fmt$(r.doorCutBasis) + ")", MINUS + fmt$(r.venue.doorCut, C));
+    if (inp.venuePerHeadOn) addRow(tb, "Venue per-head fee (" + r.attending + " in the room)", MINUS + fmt$(r.venue.perHead, C));
     addRow(tb, "Net ticket revenue (ours)", fmt$(r.netTicketRevenue, C), { cls: "total" });
   }
+  // Cost ledger values: every editable row is a control; here we fill the read-only numbers.
   function renderCosts(r, inp) {
-    var tb = $("cost-table").tBodies[0], C = { cents: true }, L = r.costs, h = r.headliner;
-    tb.textContent = "";
-    $("cost-sub").textContent = "At " + r.n + " tickets";
-    function line(label, v, on) {
-      if (on === false) addRow(tb, label, "off", { vcls: "off" });
-      else addRow(tb, label, fmt$(v, C));
+    var C = { cents: true }, L = r.costs, h = r.headliner;
+    function set(id, v, on) {
+      var e = $(id);
+      e.textContent = on === false ? "off" : fmt$(v, C);
+      e.classList.toggle("off", on === false);
     }
-    line("Headliner pay", h.pay);
-    line("Headliner travel / hotel", L.headlinerTravel);
-    line("Hospitality / rider", L.headlinerHospitality);
-    line("Supporting artists (" + inp.supportSlots + " x " + fmt$(inp.supportPrice) + ")", L.support);
-    line("VJ", L.vj, inp.vjOn);
-    line("Contracted security", L.security, inp.securityOn);
-    line("Sound rental", L.sound, inp.soundOn);
-    line("Additional deck / gear", L.gear, inp.gearOn);
-    line("Photo / video", L.photo);
-    line("Venue rental / fee", L.venueRental);
-    line("Advertising", L.ads);
-    line("Poster design", L.poster);
-    line("Printing", L.printing);
-    line("ASCAP", L.ascap, inp.ascapOn);
-    line("BMI", L.bmi, inp.bmiOn);
-    line("Event insurance", L.insurance, inp.insuranceOn);
-    inp.custom.forEach(function (row, i) { line(row.name || "Custom line " + (i + 1), row.amount); });
-    line("Contingency (" + inp.contingencyPct + "% of " + fmt$(r.contingencyBase) + ")", r.contingency);
-    addRow(tb, "Total costs", fmt$(r.totalCosts, C), { cls: "total" });
-    if (r.otherIncome) addRow(tb, "Other income", "+" + fmt$(r.otherIncome, C));
-    addRow(tb, "Net", fmt$(r.net, C), { cls: "total", vcls: signClass(r.net) });
+    $("cost-sub").textContent = "At " + r.n + " tickets";
+    set("led-hl-pay", h.pay);
+    set("led-hl-extra", L.headlinerTravel + L.headlinerHospitality);
+    $("led-support-label").textContent = "Supporting artists (" + inp.supportSlots + " x " + fmt$(inp.supportPrice) + ")";
+    set("led-support", L.support);
+    set("led-vj", L.vj, inp.vjOn);
+    set("led-talent", talentTotal(r));
+    set("led-venue-rental", L.venueRental, inp.venueRentalOn);
+    var taken = r.venue.doorCut + r.venue.perHead;
+    set("led-venue-taken", taken, inp.doorCutOn || inp.venuePerHeadOn);
+    set("led-venue", L.venueRental);
+    set("led-production", L.security + L.sound + L.gear + L.photo);
+    set("led-marketing", L.ads + L.poster + L.printing);
+    set("led-licensing", L.ascap + L.bmi + L.insurance);
+    set("led-custom", L.custom);
+    set("led-contingency", r.contingency);
+    $("led-contingency").title = inp.contingencyPct + "% of " + fmt$(r.contingencyBase, C);
+    set("led-total", r.totalCosts);
+    $("led-total-2").textContent = MINUS + fmt$(r.totalCosts, C);
+    set("led-nettix", r.netTicketRevenue);
+    $("led-net-label").textContent = "Net at " + r.n + " tickets";
+    var nv = $("led-net");
+    nv.textContent = fmt$(r.net, C);
+    nv.className = "lval " + signClass(r.net);
   }
 
   function renderNotes(inp, b) {
     var cl = $("confirm-list"), al = $("assume-list");
     cl.textContent = ""; al.textContent = "";
     function li(host, strong, rest) { host.appendChild(el("li", {}, [el("strong", { text: strong }), " " + rest])); }
-    li(cl, "Door-cut basis.", "The venue takes " + inp.doorCutPct + "% of " + CUT_SHORT[inp.doorCutBasis] + ". Confirm with the venue what the 15% is taken from; switching to gross face moves the numbers.");
-    li(cl, "Sales tax rate.", (inp.taxOn ? inp.taxRate + "% " + (inp.taxMode === "included" ? "included in the price" : "added on top") : "Sales tax is off") + ". Look up the venue address's combined rate on the Missouri DOR lookup.");
-    li(cl, "Eventbrite rates.", inp.ebServicePct + "% + " + fmt$(inp.ebServiceFixed, { cents: true }) + " service and " + inp.ebProcPct + "% processing, " + (inp.ebMode === "pass" ? "passed to the buyer" : "absorbed by us") + ". US rates as of Nov 2026; check Eventbrite's pricing page.");
-    li(cl, "PRO licensing.", "ASCAP and BMI are " + (inp.ascapOn || inp.bmiOn ? "partly on" : "off") + ": usually the venue's license. Turn them on if the venue requires promoter coverage.");
-    li(cl, "Insurance.", "Event insurance is " + (inp.insuranceOn ? "on" : "off") + " (a recent one-night quote was $357). Check whether the new venue requires it.");
-    li(cl, "Sound.", "Sound rental is " + (inp.soundOn ? "on" : "off") + ". Confirm the house system covers the lineup.");
+    function confirm(strong, rest, sec, linkText) {
+      cl.appendChild(el("li", {}, [el("strong", { text: strong }), " " + rest + " ", el("a", { href: "#" + sec, text: linkText })]));
+    }
+    var pn = platLabel(inp);
+    confirm("Venue deal.", "The venue takes " + venueDescription(inp) + ". Confirm each part with the venue" +
+      (inp.doorCutOn ? ", including what the " + inp.doorCutPct + "% is taken from; switching to gross face moves the numbers." : "."), "venue", "Open Venue");
+    confirm("Sales tax rate.", (inp.taxOn ? inp.taxRate + "% " + (inp.taxMode === "included" ? "included in the price" : "added on top") : "Sales tax is off") + ". Look up the combined rate for the venue's address.", "tickets", "Open Tickets & fees");
+    confirm(pn + " rates.", inp.ebServicePct + "% + " + fmt$(inp.ebServiceFixed, { cents: true }) + " service and " + inp.ebProcPct + "% processing, " + (inp.ebMode === "pass" ? "passed to the buyer" : "absorbed by us") + ". Check the platform's pricing page.", "tickets", "Open Tickets & fees");
+    confirm("PRO licensing.", "ASCAP and BMI are " + (inp.ascapOn || inp.bmiOn ? "partly on" : "off") + ": usually the venue's license. Turn them on if the venue requires promoter coverage.", "costs", "Open Costs");
+    confirm("Insurance.", "Event insurance is " + (inp.insuranceOn ? "on" : "off") + " (a recent one-night quote was $357). Check whether the venue requires it.", "costs", "Open Costs");
+    confirm("Sound.", "Sound rental is " + (inp.soundOn ? "on" : "off") + ". Confirm the house system covers the lineup.", "costs", "Open Costs");
 
     li(al, "Tickets.", "Capacity " + inp.capacity + " minus " + inp.comps + " comps leaves " + b.S + " sellable. Comps count toward attendance, not revenue. Online and door splits use whole tickets.");
-    li(al, "Our money.", "Net ticket revenue is ticket sales after sales tax, minus Eventbrite fees we absorb, door card processing and the venue door cut. Sales tax and fees passed to buyers are never ours.");
-    li(al, "Passed fees.", "When fees go to the buyer, Eventbrite processing applies to the whole checkout, so the buyer total is (face + on-top tax + service fee) / (1 - processing %).");
+    li(al, "Our money.", "Net ticket revenue is ticket sales after sales tax, minus " + pn + " fees we absorb, door card processing, the venue's % of door and any per-head fee. Sales tax and fees passed to buyers are never ours.");
+    li(al, "Venue deal.", "The parts add up. The % of door and the per-head fee come out of ticket revenue; the per-head fee counts everyone in the room, comps included, so it is owed even at 0 tickets. The flat rental is a cost line and counts toward contingency.");
+    li(al, "Passed fees.", "When fees go to the buyer, the platform's processing applies to the whole checkout, so the buyer total is (face + on-top tax + service fee) / (1 - processing %).");
     li(al, "Door price.", inp.doorPriceOn
-      ? "Door tickets sell at " + fmt$(inp.doorPrice, { cents: inp.doorPrice % 1 !== 0 }) + " and online tickets at " + fmt$(inp.price, { cents: inp.price % 1 !== 0 }) + ". The heatmap and break-even price move both prices together, keeping the door markup."
+      ? "Door tickets sell at " + priceText(inp.doorPrice) + " and online tickets at " + priceText(inp.price) + ". The heatmap and break-even price move both prices together, keeping the door markup."
       : "Door tickets sell at the same price as online tickets.");
     li(al, "Door card fee.", "The % applies to what the door buyer is charged, including any on-top tax. Cash has no fee.");
     li(al, "Headliner break-even.", "The first ticket count where net reaches $0 counting the guarantee and all other costs but no headliner bonus, % or backend. After-break-even parts pay only on tickets past it, and pay nothing if the show never gets there.");
     li(al, "Headliner % basis.", "Gross face is tickets x listed price (door price for door tickets). Face net removes included sales tax. A % that starts later pays on the difference between the basis at the current count and at the start point.");
     li(al, "Versus.", "Pays the greater of the guarantee and the % plus per-ticket parts; with the guarantee off the floor is $0. Backend is added after.");
-    li(al, "Contingency.", inp.contingencyPct + "% of every other cost including the guarantee, but not the headliner %, per-ticket, versus overage or backend.");
+    li(al, "Contingency.", inp.contingencyPct + "% of every other cost including the guarantee and the venue rental, but not the headliner %, per-ticket, versus overage or backend, and not the venue's % of door or per-head fee.");
     li(al, "Break-even price.", "The lowest price, to the cent, where the chosen ticket count reaches $0 net, searched up to $1,000.");
   }
 
@@ -1004,5 +1244,7 @@
   buildInputs();
   syncControls();
   wire();
+  trackVerdictHeight();
+  initSections();
   recompute();
 })();

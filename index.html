@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>150-Cap Show Feasibility</title>
+<title>Show Feasibility</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 :root {
-  /* Layout: a scrolling inputs rail on the left; the levers and verdict tiles lead the results column, detail follows; one column under 900px. */
+  /* Layout: a sticky verdict bar (tickets, price, net, break-even), section nav under it, one section shown at a time;
+     each section puts its inputs beside the results they drive (stacked, inputs first, under 900px). */
   --paper: #f1f1ed;
   --panel: #fcfcfb;
   --ink: #18191b;
@@ -95,35 +96,94 @@ a { color: var(--accent); }
 }
 .brand { display: grid; gap: 4px; }
 .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
-.venue-field { display: grid; gap: 4px; min-width: 220px; }
+.name-fields { display: flex; flex-wrap: wrap; gap: 12px; }
+.venue-field { display: grid; gap: 4px; min-width: 200px; flex: 1 1 200px; }
 .venue-field label { font-size: 12px; color: var(--ink-2); font-weight: 500; }
 .venue-field input { font: 600 17px var(--font-body); }
-.top-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-/* Shell */
-.shell {
-  display: grid;
-  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
-  grid-template-areas: "inputs levers" "inputs results";
-  grid-template-rows: auto 1fr;
-  gap: 20px;
-  padding: 20px 24px 48px;
-  max-width: 1480px; margin: 0 auto;
-  align-items: start;
+/* Sticky verdict bar */
+.verdict { position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 24px; box-shadow: 0 1px 0 var(--ring); }
+.verdict-inner {
+  max-width: 1480px; margin: 0 auto; display: grid; align-items: center; gap: 8px 24px;
+  grid-template-columns: minmax(240px, 1fr) 150px auto auto;
 }
-.inputs { grid-area: inputs; display: grid; gap: 12px; }
-.levers { grid-area: levers; display: grid; gap: 16px; }
-.results { grid-area: results; display: grid; gap: 20px; min-width: 0; }
+.v-label { font-size: 12px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+.v-n { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.v-n input[type="range"] { flex: 1 1 auto; min-width: 60px; }
+.v-n input[type="number"] { width: 76px; flex: none; font-size: 17px; font-weight: 600; padding: 5px 8px; }
+.v-price { display: flex; align-items: center; gap: 8px; }
+.v-price input { font-size: 17px; font-weight: 600; padding-top: 5px; padding-bottom: 5px; }
+.v-net, .v-be { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.v-value { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.1; }
+.v-value.loss { color: var(--crit-text); }
 @media (max-width: 900px) {
-  .shell { grid-template-columns: minmax(0, 1fr); grid-template-areas: "levers" "inputs" "results"; padding: 16px; gap: 16px; }
+  .verdict { padding: 8px 16px; }
+  .verdict-inner { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "n n n" "price net be"; gap: 6px 10px; }
+  .v-n, .v-net { min-width: 0; }
+  .v-n { grid-area: n; } .v-price { grid-area: price; } .v-net { grid-area: net; } .v-be { grid-area: be; justify-self: end; }
+  .v-price .input-wrap { width: 76px; }
+  .v-value { font-size: 18px; }
+  .v-net { gap: 6px; }
+  .v-net .pill { font-size: 0; gap: 0; padding: 3px; } /* dot only on phones; the word stays for screen readers */
+  .v-wide { display: none; }
+  .v-net .v-label, .v-be .v-label { font-size: 11px; }
+}
+@media (max-width: 380px) {
+  .v-n .v-label { display: none; }
+  .v-value { font-size: 16px; }
+}
+
+/* Section nav: tabs on desktop, scrolling pills on phone */
+.secnav { background: var(--panel); border-bottom: 1px solid var(--line); }
+.secnav ul { list-style: none; margin: 0 auto; padding: 0 20px; max-width: 1480px; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.secnav ul::-webkit-scrollbar { display: none; }
+.secnav li { flex: none; }
+.secnav a {
+  display: grid; gap: 1px; padding: 10px 14px 8px; color: var(--ink-2); text-decoration: none; white-space: nowrap;
+  font: 700 15px var(--font-display); border-bottom: 3px solid transparent;
+}
+.secnav a:hover { color: var(--ink); background: var(--accent-wash); }
+.secnav a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
+.nav-num { font: 500 12px var(--font-body); color: var(--ink-2); font-variant-numeric: tabular-nums; min-height: 1.2em; }
+.nav-num.neg { color: var(--crit-text); }
+@media (min-width: 901px) {
+  .secnav { position: sticky; top: var(--verdict-h, 60px); z-index: 9; }
+}
+@media (max-width: 900px) {
+  .secnav ul { padding: 8px 16px; gap: 6px; }
+  .secnav a { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; font-size: 14px; }
+  .secnav a[aria-current="page"] { background: var(--accent-wash); border-color: var(--accent); }
+  .nav-num { display: none; }
+}
+
+/* Shell and sections */
+.shell { padding: 20px 24px 48px; max-width: 1480px; margin: 0 auto; }
+.sec { display: grid; gap: 16px; }
+.sec[hidden] { display: none; }
+.sec-head { display: grid; gap: 2px; }
+.sec-sum { color: var(--ink-2); font-size: 14px; font-variant-numeric: tabular-nums; }
+.sec-grid { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.sec-inputs { display: grid; gap: 12px; min-width: 0; }
+.sec-results { display: grid; gap: 20px; min-width: 0; }
+.ov-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; align-items: start; }
+@media (max-width: 900px) {
+  .shell { padding: 16px; }
   .top { padding: 16px; }
+  .sec-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .ov-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
 }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; min-width: 0; }
 .card-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.card-head h3 { font-size: 18px; }
 .card-sub { color: var(--ink-2); font-size: 13px; }
+.quick-card { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; justify-content: space-between; }
+.quick-text { display: grid; gap: 2px; }
 
 /* Inputs */
+.group-card > h3 { margin-bottom: 12px; }
+.group-card .group-body { padding: 0; }
+.group-sub { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-top: 4px; }
 details.group { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 details.group > summary {
   list-style: none; cursor: pointer; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center;
@@ -174,13 +234,6 @@ button.small { padding: 4px 9px; font-size: 13px; }
 button.danger-armed { border-color: var(--crit); color: var(--crit-text); }
 
 /* Levers */
-.lever-card { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 16px 24px; align-items: end; }
-@media (max-width: 560px) { .lever-card { grid-template-columns: minmax(0, 1fr); } }
-.lever-label { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.lever-label label, .lever-title { font-family: var(--font-display); font-weight: 700; font-size: 15px; }
-.lever-n { display: flex; gap: 10px; align-items: center; }
-.lever-n input[type="number"] { width: 84px; font-size: 18px; font-weight: 600; }
-.lever-price input { font-size: 20px; font-weight: 600; }
 input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; margin: 0; }
 .quick { display: flex; flex-wrap: wrap; gap: 6px; }
 .quick button[aria-pressed="true"] { background: var(--accent-wash); border-color: var(--accent); }
@@ -248,6 +301,7 @@ table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { font-weight: 600; color: var(--ink-2); font-size: 12px; }
 td.n, th.n { text-align: right; white-space: nowrap; }
+td.n.wrap { white-space: normal; }
 tr.total td { font-weight: 600; border-top: 1px solid var(--axis); }
 tr.sub td { color: var(--ink-2); }
 tr.sub td:first-child { padding-left: 20px; }
@@ -289,6 +343,29 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 .notes strong { font-weight: 600; }
 .confirm-list li::marker { color: var(--crit); }
 
+/* Cost ledger */
+.ledger { display: grid; gap: 4px; max-width: 760px; }
+.lgroup { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.lgroup-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.lgroup-head h4 { font: 700 15px var(--font-display); margin: 0; }
+.lrow { display: grid; grid-template-columns: minmax(0, 1fr) 128px; gap: 10px; align-items: center; min-height: 34px; }
+.lrow .lval { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lrow.sub { color: var(--ink-2); font-size: 14px; }
+.lrow.sub > :first-child { padding-left: 16px; }
+.lrow.subtotal { font-weight: 600; }
+.lrow.total { font-weight: 600; border-top: 1px solid var(--axis); padding-top: 6px; }
+.lrow.grand { font-size: 17px; }
+.lrow .lname { min-width: 0; }
+.lrow.is-off .input-wrap { opacity: 0.5; }
+.lrow.contingency { grid-template-columns: minmax(0, 1fr) 84px 128px; }
+.lsummary { display: grid; gap: 4px; padding-top: 12px; }
+.custom-list .custom-row { grid-template-columns: minmax(0, 1fr) 128px auto; }
+@media (max-width: 480px) {
+  .lrow { grid-template-columns: minmax(0, 1fr) 108px; }
+  .lrow.contingency { grid-template-columns: minmax(0, 1fr) 72px 96px; }
+  .custom-list .custom-row { grid-template-columns: minmax(0, 1fr) 96px auto; }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   button, .seg, .heat td { transition: background-color 120ms ease, filter 120ms ease; }
 }
@@ -298,161 +375,234 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 <header class="top">
   <div class="brand">
     <span class="eyebrow">KC PLUR &middot; show planning</span>
-    <h1>150-Cap Show Feasibility</h1>
+    <h1>Show Feasibility</h1>
   </div>
-  <div class="venue-field">
-    <label for="f-venueName">Venue</label>
-    <input type="text" id="f-venueName" data-k="venueName" data-kind="text" autocomplete="off" spellcheck="false">
-  </div>
-  <div class="top-actions">
-    <button type="button" id="btn-copy-summary-top" class="primary">Copy summary</button>
-    <button type="button" id="btn-copy-code-top">Copy scenario code</button>
+  <div class="name-fields">
+    <div class="venue-field">
+      <label for="f-showName">Show / event</label>
+      <input type="text" id="f-showName" data-k="showName" data-kind="text" autocomplete="off" spellcheck="false" placeholder="Event name">
+    </div>
+    <div class="venue-field">
+      <label for="f-venueName">Venue</label>
+      <input type="text" id="f-venueName" data-k="venueName" data-kind="text" autocomplete="off" spellcheck="false">
+    </div>
   </div>
 </header>
 
+<div class="verdict" id="verdict" role="region" aria-label="Main levers and verdict">
+  <div class="verdict-inner">
+    <div class="v-n">
+      <label for="n-slider" class="v-label">Tickets sold</label>
+      <input type="range" id="n-slider" min="0" max="140" step="1" aria-describedby="n-context">
+      <label class="sr-only" for="n-input">Tickets sold (number)</label>
+      <input type="number" id="n-input" min="0" step="1" inputmode="numeric">
+    </div>
+    <div class="v-price">
+      <label for="f-price" class="v-label">Price</label>
+      <div class="input-wrap pre"><span class="unit" aria-hidden="true">$</span><input type="number" id="f-price" data-k="price" min="0" step="1" inputmode="decimal"></div>
+    </div>
+    <div class="v-net" aria-live="polite">
+      <span class="v-label" id="v-net-label">Net</span>
+      <span class="v-value num" id="v-net"></span>
+      <span class="pill" id="v-pill"></span>
+    </div>
+    <div class="v-be">
+      <span class="v-label">Break-even</span>
+      <span class="v-value num" id="v-be"></span>
+    </div>
+  </div>
+</div>
+
+<nav class="secnav" id="secnav" aria-label="Sections">
+  <ul>
+    <li><a href="#overview" data-sec="overview">Overview<span class="nav-num" id="nav-num-overview"></span></a></li>
+    <li><a href="#tickets" data-sec="tickets">Tickets &amp; fees<span class="nav-num" id="nav-num-tickets"></span></a></li>
+    <li><a href="#venue" data-sec="venue">Venue<span class="nav-num" id="nav-num-venue"></span></a></li>
+    <li><a href="#talent" data-sec="talent">Talent<span class="nav-num" id="nav-num-talent"></span></a></li>
+    <li><a href="#costs" data-sec="costs">Costs<span class="nav-num" id="nav-num-costs"></span></a></li>
+    <li><a href="#share" data-sec="share">Share<span class="nav-num" id="nav-num-share"></span></a></li>
+  </ul>
+</nav>
+
 <main class="shell">
-  <section class="levers" aria-label="Main levers and verdict">
-    <div class="card lever-card">
-      <div class="field">
-        <div class="lever-label">
-          <label for="n-slider">Tickets sold</label>
-          <span class="card-sub" id="n-context"></span>
-        </div>
-        <div class="lever-n">
-          <input type="range" id="n-slider" min="0" max="140" step="1" aria-describedby="n-context">
-          <label class="sr-only" for="n-input">Tickets sold (number)</label>
-          <input type="number" id="n-input" min="0" step="1" inputmode="numeric">
-        </div>
-        <div class="quick" role="group" aria-label="Set tickets sold to a share of sellable">
-          <button type="button" class="small" id="q-25" data-q="25">25%</button>
-          <button type="button" class="small" id="q-50" data-q="50">50%</button>
-          <button type="button" class="small" id="q-75" data-q="75">75%</button>
-          <button type="button" class="small" id="q-90" data-q="90">90%</button>
-          <button type="button" class="small" id="q-100" data-q="100">Sold out</button>
-        </div>
+  <!-- Overview -->
+  <section class="sec" id="sec-overview" data-sec="overview" aria-labelledby="h-overview">
+    <div class="sec-head"><h2 id="h-overview">Overview</h2><p class="sec-sum" id="sum-overview"></p></div>
+    <div class="card quick-card">
+      <div class="quick-text">
+        <span class="flabel">Tickets sold</span>
+        <span class="card-sub" id="n-context"></span>
       </div>
-      <div class="field lever-price">
-        <label for="f-price" class="lever-title">Ticket price</label>
-        <div class="input-wrap pre"><span class="unit">$</span><input type="number" id="f-price" data-k="price" min="0" step="1" inputmode="decimal"></div>
-        <span class="hint" id="price-hint"></span>
+      <div class="quick" role="group" aria-label="Set tickets sold to a share of sellable">
+        <button type="button" class="small" id="q-25" data-q="25">25%</button>
+        <button type="button" class="small" id="q-50" data-q="50">50%</button>
+        <button type="button" class="small" id="q-75" data-q="75">75%</button>
+        <button type="button" class="small" id="q-90" data-q="90">90%</button>
+        <button type="button" class="small" id="q-100" data-q="100">Sold out</button>
       </div>
     </div>
     <div class="tiles" id="tiles"></div>
+    <div class="ov-grid">
+      <div class="card">
+        <div class="card-head">
+          <h3>Profit vs tickets sold</h3>
+          <span class="card-sub" id="chart-sub"></span>
+        </div>
+        <div class="chart-wrap" id="chart-wrap"></div>
+        <p class="chart-caption">Hover or use the arrow keys on the chart to read any ticket count; click or press Enter to set it as tickets sold.</p>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Where the money goes</h3>
+          <span class="card-sub" id="money-sub"></span>
+        </div>
+        <div class="seg-wrap" id="money-bar-wrap"></div>
+        <div class="legend" id="money-legend"></div>
+        <p class="shortfall" id="money-shortfall" hidden></p>
+        <div class="table-scroll" style="margin-top:14px">
+          <table id="money-table">
+            <caption class="sr-only">Where the money goes, table view</caption>
+            <thead><tr><th scope="col">Goes to</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Share</th><th scope="col" class="n">Per ticket sold</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="ov-grid">
+      <div class="card">
+        <div class="card-head">
+          <h3>Net profit by price and attendance</h3>
+          <span class="card-sub">Blue is profit, red is loss, gray is about $0</span>
+        </div>
+        <div class="table-scroll">
+          <table class="heat" id="heatmap">
+            <caption class="sr-only">Net profit for each ticket price and attendance level</caption>
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="heat-legend" aria-hidden="true">
+          <span id="heat-min"></span><div class="heat-ramp"></div><span id="heat-max"></span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Scenarios at this price</h3>
+          <span class="card-sub" id="scen-sub"></span>
+        </div>
+        <div class="table-scroll">
+          <table id="scenarios">
+            <caption class="sr-only">Results at 25, 50, 75, 90 and 100 percent of sellable tickets</caption>
+            <thead><tr><th scope="col">Sold</th><th scope="col" class="n">Tickets</th><th scope="col" class="n">Net ticket revenue</th><th scope="col" class="n">Headliner pay</th><th scope="col" class="n">Total costs</th><th scope="col" class="n">Net</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Things to confirm before booking</h3></div>
+      <ul class="notes confirm-list" id="confirm-list"></ul>
+    </div>
   </section>
 
-  <aside class="inputs" id="inputs" aria-label="Show inputs"></aside>
-
-  <section class="results" aria-label="Results">
-    <div class="card">
-      <div class="card-head">
-        <h2>Profit vs tickets sold</h2>
-        <span class="card-sub" id="chart-sub"></span>
-      </div>
-      <div class="chart-wrap" id="chart-wrap"></div>
-      <p class="chart-caption">Hover or use the arrow keys on the chart to read any ticket count; click or press Enter to set it as tickets sold.</p>
-    </div>
-
-    <div class="card">
-      <div class="card-head">
-        <h2>Where the money goes</h2>
-        <span class="card-sub" id="money-sub"></span>
-      </div>
-      <div class="seg-wrap" id="money-bar-wrap"></div>
-      <div class="legend" id="money-legend"></div>
-      <p class="shortfall" id="money-shortfall" hidden></p>
-      <div class="table-scroll" style="margin-top:14px">
-        <table id="money-table">
-          <caption class="sr-only">Where the money goes, table view</caption>
-          <thead><tr><th scope="col">Goes to</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Share</th><th scope="col" class="n">Per ticket sold</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-head">
-        <h2>Net profit by price and attendance</h2>
-        <span class="card-sub">Blue is profit, red is loss, gray is about $0</span>
-      </div>
-      <div class="table-scroll">
-        <table class="heat" id="heatmap">
-          <caption class="sr-only">Net profit for each ticket price and attendance level</caption>
-          <thead></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="heat-legend" aria-hidden="true">
-        <span id="heat-min"></span><div class="heat-ramp"></div><span id="heat-max"></span>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-head">
-        <h2>Scenarios at this price</h2>
-        <span class="card-sub" id="scen-sub"></span>
-      </div>
-      <div class="table-scroll">
-        <table id="scenarios">
-          <caption class="sr-only">Results at 25, 50, 75, 90 and 100 percent of sellable tickets</caption>
-          <thead><tr><th scope="col">Sold</th><th scope="col" class="n">Tickets</th><th scope="col" class="n">Net ticket revenue</th><th scope="col" class="n">Headliner pay</th><th scope="col" class="n">Total costs</th><th scope="col" class="n">Net</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="two-col">
-      <div class="card">
-        <div class="card-head"><h2>Headliner payout</h2><span class="card-sub" id="hl-sub"></span></div>
-        <table id="hl-table"><caption class="sr-only">Headliner payout breakdown</caption><tbody></tbody></table>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2>Per ticket</h2><span class="card-sub" id="pt-sub"></span></div>
-        <table id="pt-table"><caption class="sr-only">Per-ticket prices and fees</caption><tbody></tbody></table>
-      </div>
-    </div>
-
-    <div class="two-col">
-      <div class="card">
-        <div class="card-head"><h2>Ticket money</h2><span class="card-sub" id="tm-sub"></span></div>
-        <table id="tm-table"><caption class="sr-only">Ticket money breakdown</caption><tbody></tbody></table>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2>Costs</h2><span class="card-sub" id="cost-sub"></span></div>
-        <table id="cost-table"><caption class="sr-only">Cost lines</caption><tbody></tbody></table>
-      </div>
-    </div>
-
-    <div class="card" id="share">
-      <div class="card-head"><h2>Share this scenario</h2></div>
-      <div class="share-grid">
-        <div class="share-row">
-          <button type="button" id="btn-copy-summary" class="primary">Copy summary</button>
-          <button type="button" id="btn-copy-code">Copy scenario code</button>
-          <button type="button" id="btn-reset">Reset to defaults</button>
+  <!-- Tickets & fees -->
+  <section class="sec" id="sec-tickets" data-sec="tickets" aria-labelledby="h-tickets" hidden>
+    <div class="sec-head"><h2 id="h-tickets">Tickets &amp; fees</h2><p class="sec-sum" id="sum-tickets"></p></div>
+    <div class="sec-grid">
+      <div class="sec-inputs" id="in-tickets"></div>
+      <div class="sec-results">
+        <div class="card">
+          <div class="card-head"><h3>Per ticket</h3><span class="card-sub" id="pt-sub"></span></div>
+          <table id="pt-table"><caption class="sr-only">Per-ticket prices and fees</caption><tbody></tbody></table>
         </div>
-        <p class="msg" id="share-msg" role="status" aria-live="polite"></p>
-        <div class="field" id="copy-fallback" hidden>
-          <label for="copy-fallback-text">Copying was blocked. Select this text and copy it yourself.</label>
-          <textarea id="copy-fallback-text" rows="6" readonly></textarea>
+        <div class="card">
+          <div class="card-head"><h3>Ticket money</h3><span class="card-sub" id="tm-sub"></span></div>
+          <table id="tm-table"><caption class="sr-only">Ticket money breakdown</caption><tbody></tbody></table>
         </div>
-        <div class="field">
-          <label for="load-code">Load a scenario code</label>
-          <textarea id="load-code" rows="3" placeholder="Paste a scenario code from a teammate"></textarea>
-        </div>
-        <div class="share-row"><button type="button" id="btn-load">Load scenario</button></div>
-        <p class="hint">The summary is plain text for Discord or a text thread. The scenario code holds every input, so whoever loads it sees the same numbers. Your last scenario is also kept in this browser.</p>
       </div>
     </div>
+  </section>
 
-    <div class="card" id="assumptions">
-      <div class="card-head"><h2>Assumptions and things to confirm</h2></div>
-      <div class="two-col">
-        <div>
-          <h3 style="margin-bottom:8px">Confirm before booking</h3>
-          <ul class="notes confirm-list" id="confirm-list"></ul>
+  <!-- Venue -->
+  <section class="sec" id="sec-venue" data-sec="venue" aria-labelledby="h-venue" hidden>
+    <div class="sec-head"><h2 id="h-venue">Venue</h2><p class="sec-sum" id="sum-venue"></p></div>
+    <div class="sec-grid">
+      <div class="sec-inputs" id="in-venue"></div>
+      <div class="sec-results">
+        <div class="card">
+          <div class="card-head"><h3>What the venue takes</h3><span class="card-sub" id="venue-sub"></span></div>
+          <div class="table-scroll">
+            <table id="venue-table">
+              <caption class="sr-only">What the venue takes at the chosen ticket count and at sell-out</caption>
+              <thead><tr><th scope="col">Part</th><th scope="col" class="n" id="venue-col-now">Now</th><th scope="col" class="n" id="venue-col-out">Sold out</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="hint" style="margin-top:10px">The % of door and the per-head fee come out of ticket revenue. The flat rental is a cost line, so it also counts toward contingency.</p>
         </div>
-        <div>
-          <h3 style="margin-bottom:8px">How the numbers work</h3>
+      </div>
+    </div>
+  </section>
+
+  <!-- Talent -->
+  <section class="sec" id="sec-talent" data-sec="talent" aria-labelledby="h-talent" hidden>
+    <div class="sec-head"><h2 id="h-talent">Talent</h2><p class="sec-sum" id="sum-talent"></p></div>
+    <div class="sec-grid">
+      <div class="sec-inputs" id="in-talent"></div>
+      <div class="sec-results">
+        <div class="card">
+          <div class="card-head"><h3>Headliner payout</h3><span class="card-sub" id="hl-sub"></span></div>
+          <table id="hl-table"><caption class="sr-only">Headliner payout breakdown</caption><tbody></tbody></table>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Total talent cost</h3><span class="card-sub" id="talent-sub"></span></div>
+          <table id="talent-table"><caption class="sr-only">Total talent cost</caption><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Costs -->
+  <section class="sec" id="sec-costs" data-sec="costs" aria-labelledby="h-costs" hidden>
+    <div class="sec-head"><h2 id="h-costs">Costs</h2><p class="sec-sum" id="sum-costs"></p></div>
+    <div class="card ledger-card">
+      <div class="card-head"><h3>Cost ledger</h3><span class="card-sub" id="cost-sub"></span></div>
+      <div class="ledger" id="ledger"></div>
+    </div>
+  </section>
+
+  <!-- Share -->
+  <section class="sec" id="sec-share" data-sec="share" aria-labelledby="h-share" hidden>
+    <div class="sec-head"><h2 id="h-share">Share</h2><p class="sec-sum" id="sum-share"></p></div>
+    <div class="sec-grid">
+      <div class="sec-inputs">
+        <div class="card">
+          <div class="card-head"><h3>Share this scenario</h3></div>
+          <div class="share-grid">
+            <div class="share-row">
+              <button type="button" id="btn-copy-summary" class="primary">Copy summary</button>
+              <button type="button" id="btn-copy-code">Copy scenario code</button>
+            </div>
+            <p class="msg" id="share-msg" role="status" aria-live="polite"></p>
+            <div class="field" id="copy-fallback" hidden>
+              <label for="copy-fallback-text">Copying was blocked. Select this text and copy it yourself.</label>
+              <textarea id="copy-fallback-text" rows="6" readonly></textarea>
+            </div>
+            <div class="field">
+              <label for="load-code">Load a scenario code</label>
+              <textarea id="load-code" rows="3" placeholder="Paste a scenario code from a teammate"></textarea>
+            </div>
+            <div class="share-row">
+              <button type="button" id="btn-load">Load scenario</button>
+              <button type="button" id="btn-reset">Reset to defaults</button>
+            </div>
+            <p class="hint">The summary is plain text for Discord or a text thread. The scenario code holds every input, so whoever loads it sees the same numbers. Your last scenario is also kept in this browser.</p>
+          </div>
+        </div>
+      </div>
+      <div class="sec-results">
+        <div class="card" id="assumptions">
+          <div class="card-head"><h3>How the numbers work</h3></div>
           <ul class="notes" id="assume-list"></ul>
         </div>
       </div>
@@ -461,7 +611,7 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 </main>
 <div class="tip" id="tip" role="presentation"></div>
 
-<script src="model.js"></script>
-<script src="app.js"></script>
+<script src="model.js?v=2"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

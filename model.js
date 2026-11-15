@@ -1,5 +1,5 @@
 /*
- * 150-Cap Show Feasibility: pure model (no DOM).
+ * Show Feasibility: pure model (no DOM).
  * Works in the browser (window.ShowModel) and in Node (module.exports).
  *
  * Money is kept unrounded internally; round only for display and asserts.
@@ -14,7 +14,7 @@
  *    ("gross face value incl. tax") also includes tax added on top.
  *  - Door card fee % applies to what the door buyer is charged (incl. on-top tax).
  *  - Door price (when on) replaces the ticket price for door tickets only; online
- *    tickets and Eventbrite fees use the ticket price. Price sweeps (break-even
+ *    tickets and ticketing platform fees use the ticket price. Price sweeps (break-even
  *    price, heatmap) keep the door markup fixed and move both prices together.
  *  - Thresholded % part = pct x (basis(n) - basis(threshold)), so it also works on
  *    the net-revenue basis.
@@ -22,6 +22,16 @@
  *    versus overage above the guarantee, backend), matching headlinerBreakEven.
  *  - Versus with guarantee off: the floor is $0.
  *  - headlinerBreakEven null (never breaks even): after-break-even parts pay $0.
+ *  - Venue deal parts sum: door % (own toggle), flat rental (own toggle) and a
+ *    per-head fee charged on everyone in the room (tickets sold + comps), so it is
+ *    owed on comps even at 0 tickets. Door % and per-head come out of net ticket
+ *    revenue (so they count in every break-even and in the "our net" basis); the
+ *    rental is a fixed cost and, as before, sits in the contingency base. The
+ *    per-head fee is NOT in the contingency base (like the door %).
+ *  - Old saved scenarios: a missing venueRentalOn means "on if venueRental > 0";
+ *    a missing door % toggle means on; a missing platform preset is detected from
+ *    the three platform rates. Only missing keys are migrated, so sanitize is
+ *    idempotent.
  */
 (function (root, factory) {
   var api = factory();
@@ -34,12 +44,13 @@
 
   var DEFAULTS = {
     venueName: "New venue",
+    showName: "",
     // Tickets & sales
     capacity: 150,
     comps: 5,
     price: 25,
     expectedPct: 75,          // default ticket-count slider position, % of sellable
-    onlinePct: 50,           // % sold online via Eventbrite
+    onlinePct: 50,            // % sold online through the ticketing platform
     doorPriceOn: true,       // door tickets sell at a different price
     doorPrice: 30,            // door face price when doorPriceOn
     doorCashPct: 30,           // % of door sales paid in cash
@@ -49,15 +60,21 @@
     taxOn: true,
     taxRate: 10,
     taxMode: "ontop",         // "included" | "ontop"
-    // Eventbrite
+    // Ticketing platform (keys keep their original "eb" names for saved scenarios)
+    ticketPlatform: "Eventbrite",
+    ebPreset: "eventbrite",   // "eventbrite" | "custom"
     ebServicePct: 3.7,
     ebServiceFixed: 1.79,
     ebProcPct: 2.9,
     ebMode: "pass",           // "pass" | "absorb"
-    // Venue deal
+    // Venue deal: parts sum
+    doorCutOn: true,
     doorCutPct: 15,
     doorCutBasis: "afterTax", // "afterTax" | "afterTaxFees" | "gross"
+    venueRentalOn: false,
     venueRental: 0,
+    venuePerHeadOn: false,
+    venuePerHead: 0,          // $ per person in the room (tickets sold + comps)
     // Headliner deal
     hlPreset: "flatBonus",
     hlGuaranteeOn: true,
@@ -111,6 +128,7 @@
   var ENUMS = {
     taxMode: ["included", "ontop"],
     ebMode: ["pass", "absorb"],
+    ebPreset: ["eventbrite", "custom"],
     doorCutBasis: ["afterTax", "afterTaxFees", "gross"],
     hlPctBasis: ["grossFace", "faceNet", "net"],
     hlPctStart: ["first", "breakEven", "afterN"],
@@ -127,6 +145,22 @@
     flatBonus:   { hlGuaranteeOn: true,  hlPctOn: false, hlPerTicketOn: true,  hlBackendOn: false, hlVersus: false, hlPerTicketStart: "breakEven" },
     versus:      { hlGuaranteeOn: true,  hlPctOn: true,  hlPerTicketOn: false, hlBackendOn: false, hlVersus: true,  hlPctStart: "first" }
   };
+
+  // Ticketing platform presets set the platform name and the three rates.
+  // Only rates we have checked go here; anything else is "custom".
+  var PLATFORM_PRESETS = {
+    eventbrite: { ticketPlatform: "Eventbrite", ebServicePct: 3.7, ebServiceFixed: 1.79, ebProcPct: 2.9 }
+  };
+  var PLATFORM_RATE_KEYS = ["ebServicePct", "ebServiceFixed", "ebProcPct"];
+
+  function detectPlatform(inp) {
+    var keys = Object.keys(PLATFORM_PRESETS);
+    for (var i = 0; i < keys.length; i++) {
+      var p = PLATFORM_PRESETS[keys[i]];
+      if (PLATFORM_RATE_KEYS.every(function (k) { return Math.abs(inp[k] - p[k]) < 1e-9; })) return keys[i];
+    }
+    return "custom";
+  }
 
   function num(v, d) {
     var x = typeof v === "number" ? v : parseFloat(v);
@@ -164,6 +198,9 @@
     out.hlPerTicketStartN = Math.round(out.hlPerTicketStartN);
     ["onlinePct", "doorCashPct", "expectedPct"].forEach(function (k) { out[k] = Math.min(100, out[k]); });
     out.ebProcPct = Math.min(50, out.ebProcPct);
+    // Migrate scenarios saved before these keys existed (missing keys only).
+    if (typeof src.venueRentalOn !== "boolean") out.venueRentalOn = out.venueRental > 0;
+    if (ENUMS.ebPreset.indexOf(src.ebPreset) < 0) out.ebPreset = detectPlatform(out);
     return out;
   }
 
@@ -197,7 +234,7 @@
     var on = face(inp.price);                                // online (advance) ticket
     var dr = face(inp.doorPriceOn ? inp.doorPrice : inp.price); // door ticket
 
-    // Eventbrite (online only)
+    // Ticketing platform (online only)
     var P = on.P;
     var ebProc = inp.ebProcPct / 100;
     var ebService = inp.ebServicePct / 100 * P + inp.ebServiceFixed;
@@ -237,10 +274,12 @@
     if (inp.doorCutBasis === "afterTax") cutBasis = faceNet;
     else if (inp.doorCutBasis === "afterTaxFees") cutBasis = faceNet - ebAbsorbed - doorProc;
     else cutBasis = online * on.gross + door * dr.gross;
-    var doorCut = Math.max(0, cutBasis) * inp.doorCutPct / 100;
+    var doorCut = inp.doorCutOn ? Math.max(0, cutBasis) * inp.doorCutPct / 100 : 0;
+    var attending = n + inp.comps;
+    var perHead = inp.venuePerHeadOn ? attending * inp.venuePerHead : 0;
 
     var buyersPaid = online * onlineBuyerPer + door * doorBuyerPer;
-    var netTicketRevenue = faceNet - ebAbsorbed - doorProc - doorCut;
+    var netTicketRevenue = faceNet - ebAbsorbed - doorProc - doorCut - perHead;
 
     return {
       n: n,
@@ -264,6 +303,8 @@
       doorProc: doorProc,
       doorCutBasis: cutBasis,
       doorCut: doorCut,
+      attending: attending,
+      perHead: perHead,
       buyersPaid: buyersPaid,
       buyersPaidOnline: online * onlineBuyerPer,
       buyersPaidDoor: door * doorBuyerPer,
@@ -291,7 +332,7 @@
       sound: inp.soundOn ? inp.sound : 0,
       gear: inp.gearOn ? inp.gear : 0,
       photo: inp.photo,
-      venueRental: inp.venueRental,
+      venueRental: inp.venueRentalOn ? inp.venueRental : 0,
       ads: inp.ads,
       poster: inp.poster,
       printing: inp.printing,
@@ -378,12 +419,12 @@
       tax: ts.tax,
       ebFees: ts.ebTotal,
       doorProc: ts.doorProc,
-      doorCut: ts.doorCut,
+      venue: ts.doorCut + ts.perHead + L.venueRental,
       headliner: headlinerTotal,
       supportVj: L.support + L.vj,
       production: L.sound + L.security + L.gear,
       marketing: L.ads + L.poster + L.printing,
-      other: L.venueRental + L.ascap + L.bmi + L.insurance + L.photo + L.custom + fc.contingency,
+      other: L.ascap + L.bmi + L.insurance + L.photo + L.custom + fc.contingency,
       profit: Math.max(0, net),
       loss: Math.max(0, -net)
     };
@@ -411,6 +452,11 @@
       doorProc: ts.doorProc,
       doorCutBasis: ts.doorCutBasis,
       doorCut: ts.doorCut,
+      attending: ts.attending,
+      venue: {
+        doorCut: ts.doorCut, rental: L.venueRental, perHead: ts.perHead,
+        total: ts.doorCut + ts.perHead + L.venueRental
+      },
       buyersPaid: ts.buyersPaid,
       buyersPaidOnline: ts.buyersPaidOnline,
       buyersPaidDoor: ts.buyersPaidDoor,
@@ -496,6 +542,8 @@
     DEFAULT_N: DEFAULT_N,
     ENUMS: ENUMS,
     PRESETS: PRESETS,
+    PLATFORM_PRESETS: PLATFORM_PRESETS,
+    detectPlatform: detectPlatform,
     sanitize: sanitize,
     sellable: sellable,
     expectedTickets: expectedTickets,
