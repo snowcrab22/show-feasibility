@@ -100,6 +100,11 @@ a { color: var(--accent); }
 .venue-field { display: grid; gap: 4px; min-width: 200px; flex: 1 1 200px; }
 .venue-field label { font-size: 12px; color: var(--ink-2); font-weight: 500; }
 .venue-field input { font: 600 17px var(--font-body); }
+@media (max-width: 600px) {
+  .name-fields { flex-wrap: nowrap; width: 100%; gap: 10px; }
+  .venue-field { min-width: 0; flex: 1 1 0; }
+  .venue-field input { font-size: 16px; }
+}
 
 /* Sticky verdict bar */
 .verdict { position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 24px; box-shadow: 0 1px 0 var(--ring); }
@@ -133,8 +138,8 @@ a { color: var(--accent); }
   .v-value { font-size: 16px; }
 }
 
-/* Section nav: tabs on desktop, scrolling pills on phone */
-.secnav { background: var(--panel); border-bottom: 1px solid var(--line); }
+/* Section nav: tabs under the verdict bar, sticky at every width; all six fit on a 375px phone */
+.secnav { background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: var(--verdict-h, 60px); z-index: 9; }
 .secnav ul { list-style: none; margin: 0 auto; padding: 0 20px; max-width: 1480px; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
 .secnav ul::-webkit-scrollbar { display: none; }
 .secnav li { flex: none; }
@@ -146,14 +151,14 @@ a { color: var(--accent); }
 .secnav a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
 .nav-num { font: 500 12px var(--font-body); color: var(--ink-2); font-variant-numeric: tabular-nums; min-height: 1.2em; }
 .nav-num.neg { color: var(--crit-text); }
-@media (min-width: 901px) {
-  .secnav { position: sticky; top: var(--verdict-h, 60px); z-index: 9; }
-}
 @media (max-width: 900px) {
-  .secnav ul { padding: 8px 16px; gap: 6px; }
-  .secnav a { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; font-size: 14px; }
-  .secnav a[aria-current="page"] { background: var(--accent-wash); border-color: var(--accent); }
+  .secnav ul { padding: 0 6px; gap: 0; justify-content: space-between; }
+  .secnav li { flex: 1 1 auto; }
+  .secnav a { padding: 9px 6px 6px; font-size: 13px; text-align: center; justify-content: center; }
   .nav-num { display: none; }
+}
+@media (max-width: 600px) {
+  .nav-long { display: none; } /* "Tickets" instead of "Tickets & fees" on phones */
 }
 
 /* Shell and sections */
@@ -207,6 +212,9 @@ input[type="number"], input[type="text"], select, textarea {
 }
 textarea { font: 13px/1.4 ui-monospace, "Cascadia Mono", Menlo, monospace; resize: vertical; }
 input[type="number"] { font-variant-numeric: tabular-nums; }
+@media (max-width: 900px) {
+  input[type="number"], input[type="text"], select, textarea { font-size: 16px; }
+}
 select { padding-right: 28px; }
 .input-wrap { position: relative; display: flex; align-items: center; }
 .input-wrap .unit { position: absolute; color: var(--ink-2); font-size: 14px; pointer-events: none; }
@@ -255,6 +263,15 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; ma
 .pill[data-status="loss"]::before { background: var(--crit); border-radius: 1px; transform: rotate(45deg); }
 .pill[data-status="even"]::before { background: var(--warn); }
 .tile-value.loss { color: var(--crit-text); }
+@media (max-width: 600px) {
+  /* Net across the top, the other four as a 2 x 2 */
+  .tiles { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+  .tile.hero { grid-column: 1 / -1; }
+  .tile { padding: 12px; }
+  .tile-value { font-size: 22px; }
+  .tile.hero .tile-value { font-size: 34px; }
+  .tile-label, .tile-sub { font-size: 12px; }
+}
 
 /* Chart */
 .chart-wrap { position: relative; width: 100%; }
@@ -290,9 +307,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; ma
 .inflow-mark { position: absolute; top: 0; bottom: -6px; width: 0; border-left: 2px solid var(--ink); }
 .inflow-mark span { position: absolute; top: 0; left: 6px; font-size: 12px; white-space: nowrap; color: var(--ink); font-weight: 600; }
 .inflow-mark.flip span { left: auto; right: 6px; }
-.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; font-size: 13px; color: var(--ink-2); }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
 .shortfall { margin-top: 10px; font-size: 14px; color: var(--crit-text); font-weight: 600; }
 
 /* Tables */
@@ -307,6 +321,15 @@ tr.sub td { color: var(--ink-2); }
 tr.sub td:first-child { padding-left: 20px; }
 tr.current td { background: var(--accent-wash); }
 td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: 0; }
+/* Money table: the swatch sits on the name's first line; the detail is a small second line */
+.mname { display: block; position: relative; padding-left: 18px; }
+.mname .sw { position: absolute; left: 0; top: 0.32em; margin: 0; }
+.mdetail { display: block; padding-left: 18px; font-size: 12px; color: var(--ink-2); font-weight: 400; }
+td.neg .mdetail { color: var(--crit-text); }
+.nowrap { white-space: nowrap; }
+@media (max-width: 480px) {
+  .col-pt, .col-ntr, .col-hl { display: none; }
+}
 .pos { color: var(--good-text); }
 .neg { color: var(--crit-text); }
 .off { color: var(--muted); }
@@ -315,9 +338,10 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 
 /* Heatmap */
 .heat { border-collapse: separate; border-spacing: 2px; width: 100%; table-layout: fixed; }
-.heat th, .heat td { border: 0; text-align: center; padding: 0; }
+.heat th, .heat td { border: 0; text-align: center; padding: 0; vertical-align: middle; }
 .heat thead th { padding: 4px 2px; font-size: 12px; }
-.heat tbody th { text-align: right; padding-right: 8px; font-size: 12px; font-weight: 500; width: 88px; color: var(--ink-2); white-space: nowrap; }
+.heat thead th.heat-corner { width: 92px; }
+.heat tbody th { text-align: right; padding-right: 8px; font-size: 12px; font-weight: 500; color: var(--ink-2); white-space: nowrap; line-height: 1.2; }
 .heat td { height: 44px; border-radius: 4px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: default; }
 .heat td.weak { color: var(--hm-weak-text); }
 .heat td.strong { color: var(--hm-strong-text); }
@@ -328,8 +352,13 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 .heat-ramp { height: 10px; border-radius: 5px; background: linear-gradient(to right, var(--div-neg), var(--div-mid), var(--div-pos)); position: relative; }
 .heat-ramp::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; border-left: 1px solid var(--ink-2); }
 @media (max-width: 480px) {
-  .heat td { font-size: 11px; height: 38px; }
-  .heat tbody th { width: 64px; }
+  .heat thead th.heat-corner { width: 46px; }
+  .heat thead th { font-size: 11px; padding: 4px 0; }
+  .heat td { font-size: 11px; height: 40px; letter-spacing: -0.02em; }
+  .heat tbody th { padding-right: 5px; font-size: 11px; }
+  .heat tbody th .hl-pct, .heat tbody th .hl-n { display: block; }
+  .heat tbody th .hl-pct { color: var(--ink); font-weight: 600; }
+  .heat tbody th .hl-sep { display: none; }
 }
 
 /* Share & notes */
@@ -342,9 +371,17 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 .notes li { font-size: 14px; }
 .notes strong { font-weight: 600; }
 .confirm-list li::marker { color: var(--crit); }
+@media (min-width: 901px) {
+  .confirm-list { display: block; columns: 2; column-gap: 40px; max-width: none; }
+  .confirm-list li { break-inside: avoid; margin-bottom: 8px; }
+}
+.export-ready { font-size: 14px; }
+.export-ready a { font-weight: 600; overflow-wrap: anywhere; }
 
 /* Cost ledger */
-.ledger { display: grid; gap: 4px; max-width: 760px; }
+.ledger { display: grid; gap: 4px; }
+.costs-grid { grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr); }
+@media (max-width: 900px) { .costs-grid { grid-template-columns: minmax(0, 1fr); } }
 .lgroup { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .lgroup-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .lgroup-head h4 { font: 700 15px var(--font-display); margin: 0; }
@@ -358,7 +395,7 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 .lrow .lname { min-width: 0; }
 .lrow.is-off .input-wrap { opacity: 0.5; }
 .lrow.contingency { grid-template-columns: minmax(0, 1fr) 84px 128px; }
-.lsummary { display: grid; gap: 4px; padding-top: 12px; }
+.lsummary { display: grid; gap: 4px; }
 .custom-list .custom-row { grid-template-columns: minmax(0, 1fr) 128px auto; }
 @media (max-width: 480px) {
   .lrow { grid-template-columns: minmax(0, 1fr) 108px; }
@@ -416,7 +453,7 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 <nav class="secnav" id="secnav" aria-label="Sections">
   <ul>
     <li><a href="#overview" data-sec="overview">Overview<span class="nav-num" id="nav-num-overview"></span></a></li>
-    <li><a href="#tickets" data-sec="tickets">Tickets &amp; fees<span class="nav-num" id="nav-num-tickets"></span></a></li>
+    <li><a href="#tickets" data-sec="tickets"><span>Tickets<span class="nav-long"> &amp; fees</span></span><span class="nav-num" id="nav-num-tickets"></span></a></li>
     <li><a href="#venue" data-sec="venue">Venue<span class="nav-num" id="nav-num-venue"></span></a></li>
     <li><a href="#talent" data-sec="talent">Talent<span class="nav-num" id="nav-num-talent"></span></a></li>
     <li><a href="#costs" data-sec="costs">Costs<span class="nav-num" id="nav-num-costs"></span></a></li>
@@ -457,12 +494,11 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
           <span class="card-sub" id="money-sub"></span>
         </div>
         <div class="seg-wrap" id="money-bar-wrap"></div>
-        <div class="legend" id="money-legend"></div>
         <p class="shortfall" id="money-shortfall" hidden></p>
         <div class="table-scroll" style="margin-top:14px">
           <table id="money-table">
             <caption class="sr-only">Where the money goes, table view</caption>
-            <thead><tr><th scope="col">Goes to</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Share</th><th scope="col" class="n">Per ticket sold</th></tr></thead>
+            <thead><tr><th scope="col">Goes to</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Share</th><th scope="col" class="n col-pt">Per ticket sold</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -493,7 +529,7 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
         <div class="table-scroll">
           <table id="scenarios">
             <caption class="sr-only">Results at 25, 50, 75, 90 and 100 percent of sellable tickets</caption>
-            <thead><tr><th scope="col">Sold</th><th scope="col" class="n">Tickets</th><th scope="col" class="n">Net ticket revenue</th><th scope="col" class="n">Headliner pay</th><th scope="col" class="n">Total costs</th><th scope="col" class="n">Net</th></tr></thead>
+            <thead><tr><th scope="col">Sold</th><th scope="col" class="n">Tickets</th><th scope="col" class="n col-ntr">Net ticket revenue</th><th scope="col" class="n col-hl">Headliner pay</th><th scope="col" class="n">Total costs</th><th scope="col" class="n">Net</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -565,9 +601,21 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
   <!-- Costs -->
   <section class="sec" id="sec-costs" data-sec="costs" aria-labelledby="h-costs" hidden>
     <div class="sec-head"><h2 id="h-costs">Costs</h2><p class="sec-sum" id="sum-costs"></p></div>
-    <div class="card ledger-card">
-      <div class="card-head"><h3>Cost ledger</h3><span class="card-sub" id="cost-sub"></span></div>
-      <div class="ledger" id="ledger"></div>
+    <div class="sec-grid costs-grid">
+      <div class="card ledger-card">
+        <div class="card-head"><h3>Cost ledger</h3><span class="card-sub" id="cost-sub"></span></div>
+        <div class="ledger" id="ledger"></div>
+      </div>
+      <div class="sec-results">
+        <div class="card">
+          <div class="card-head"><h3>Costs by category</h3><span class="card-sub" id="cat-sub"></span></div>
+          <table id="cat-table"><caption class="sr-only">Costs by category</caption><tbody></tbody></table>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Net</h3><span class="card-sub" id="net-sub"></span></div>
+          <div id="ledger-summary"></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -577,13 +625,16 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
     <div class="sec-grid">
       <div class="sec-inputs">
         <div class="card">
-          <div class="card-head"><h3>Share this scenario</h3></div>
+          <div class="card-head"><h3>Share and export</h3></div>
           <div class="share-grid">
             <div class="share-row">
               <button type="button" id="btn-copy-summary" class="primary">Copy summary</button>
               <button type="button" id="btn-copy-code">Copy scenario code</button>
+              <button type="button" id="btn-export">Export to spreadsheet</button>
             </div>
             <p class="msg" id="share-msg" role="status" aria-live="polite"></p>
+            <p class="msg" id="export-msg" role="status" aria-live="polite" hidden></p>
+            <p class="export-ready" id="export-ready" hidden></p>
             <div class="field" id="copy-fallback" hidden>
               <label for="copy-fallback-text">Copying was blocked. Select this text and copy it yourself.</label>
               <textarea id="copy-fallback-text" rows="6" readonly></textarea>
@@ -596,7 +647,7 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
               <button type="button" id="btn-load">Load scenario</button>
               <button type="button" id="btn-reset">Reset to defaults</button>
             </div>
-            <p class="hint">The summary is plain text for Discord or a text thread. The scenario code holds every input, so whoever loads it sees the same numbers. Your last scenario is also kept in this browser.</p>
+            <p class="hint">The summary is plain text for Discord or a text thread. The scenario code holds every input, so whoever loads it sees the same numbers. The spreadsheet is a snapshot of every tab as an Excel file that also opens in Google Sheets and Numbers. Your last scenario is also kept in this browser.</p>
           </div>
         </div>
       </div>
@@ -611,7 +662,8 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; m
 </main>
 <div class="tip" id="tip" role="presentation"></div>
 
-<script src="model.js?v=2"></script>
-<script src="app.js?v=2"></script>
+<script src="model.js?v=3"></script>
+<script src="export.js?v=3"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>
