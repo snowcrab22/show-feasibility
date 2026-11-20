@@ -4,6 +4,7 @@
   var M = window.ShowModel;
   var X = window.ShowExport;
   var WB = window.ShowWorkbook;
+  var G = window.ShowGoogle;
   var STORE_KEY = "kcplur-show-feasibility-v1"; // same key and {v, inputs, n} shape as the first version
   var SECTION_KEY = "kcplur-show-feasibility-section";
   var SECTION_NAMES = ["overview", "tickets", "venue", "talent", "costs", "share"];
@@ -344,7 +345,7 @@
     try { localStorage.setItem(SECTION_KEY, name); } catch (e) { /* storage unavailable */ }
     hideTip();
     if (name === "overview" && last) { renderChart(last); renderMoneyBar(last.r); }
-    if (name === "share") preloadExcel(); // fetch the spreadsheet library before the tap
+    if (name === "share") { preloadExcel(); if (googleReady()) G.preload(); } // fetch libraries before the tap
     // If the page is scrolled past the nav, bring the top of the new section under the sticky bar.
     if (changed && !opts.initial) {
       var nav = $("secnav"), covered = $("verdict").offsetHeight;
@@ -415,6 +416,17 @@
     $("btn-copy-link-top").addEventListener("click", copyLink);
     $("btn-undo-shared").addEventListener("click", undoShared);
     $("btn-close-banner").addEventListener("click", hideBanner);
+    $("btn-gsheet").addEventListener("click", onOpenInSheets);
+    $("btn-save").addEventListener("click", function () { onSave(false); });
+    $("btn-save-new").addEventListener("click", function () { onSave(true); });
+    $("btn-copy-saved").addEventListener("click", function () { if (savedFile) copyText(G.fileLink(savedFile.id), "Saved scenario link copied."); });
+    $("btn-list-saved").addEventListener("click", onListSaved);
+    $("saved-list").addEventListener("click", function (e) {
+      var b = e.target.closest("button");
+      if (!b) return;
+      if (b.dataset.open) openSavedFile(b.dataset.open);
+      else if (b.dataset.copy) copyText(G.fileLink(b.dataset.copy), "Saved scenario link copied.");
+    });
     $("btn-load").addEventListener("click", loadFromBox);
     $("btn-export").addEventListener("click", onExport);
     var armed = null;
@@ -430,6 +442,7 @@
       b.textContent = "Reset to defaults"; b.classList.remove("danger-armed");
       state.inputs = M.sanitize(M.DEFAULTS);
       state.nWant = state.n = Math.min(M.DEFAULT_N, M.sellable(state.inputs));
+      setSavedFile(null);
       syncControls();
       recompute();
       showMsg("Reset to the default scenario.", "ok");
@@ -521,24 +534,24 @@
     if (undoState && undoState.inputs) showBanner("You're looking at a scenario someone shared: " + scenarioTitle(state.inputs) + ".");
     else undoState = null;
   }
-  function snapshotState() { return { inputs: JSON.parse(JSON.stringify(state.inputs)), n: state.nWant }; }
+  function snapshotState() { return { inputs: JSON.parse(JSON.stringify(state.inputs)), n: state.nWant, saved: savedFile }; }
   function openShared(obj, label) {
     var before = snapshotState();
     applyScenario({ inputs: obj.inputs, n: obj.n });
     if (!undoState) setUndo(before); // first open keeps the visitor's own scenario
+    setSavedFile(null); // a saved file sets itself again after this
     syncControls();
     recompute();
     showBanner((label || "Opened a shared scenario") + ": " + scenarioTitle(state.inputs) + ".");
-    if (window.ShowApp && window.ShowApp.onScenarioOpened) window.ShowApp.onScenarioOpened(obj);
   }
   function undoShared() {
     if (!undoState) return hideBanner();
     applyScenario(undoState);
+    setSavedFile(undoState.saved || null);
     setUndo(null);
     syncControls();
     recompute();
     hideBanner();
-    if (window.ShowApp && window.ShowApp.onScenarioOpened) window.ShowApp.onScenarioOpened(null);
     toast("Back to your own scenario.", "ok");
   }
   function hideBanner() { $("shared-banner").hidden = true; setUndo(null); }
@@ -558,10 +571,131 @@
     try { history.replaceState(null, "", location.pathname + location.search + "#" + (current || "overview")); } catch (e) { /* old browsers */ }
     return true;
   }
-  // Saved files need Google (google.js). Without it, say so.
+  // ---------------------------------------------------------------- Google: saved scenarios and Sheets
+  var SAVED_KEY = "kcplur-show-feasibility-saved";
+  var savedFile = null; // { id, name } of the saved scenario this page is showing, if any
+  function googleReady() { return !!(G && G.configured()); }
+  function setSavedFile(f) {
+    savedFile = f && f.id ? { id: f.id, name: f.name } : null;
+    try { if (savedFile) localStorage.setItem(SAVED_KEY, JSON.stringify(savedFile)); else localStorage.removeItem(SAVED_KEY); } catch (e) { /* storage unavailable */ }
+    renderSavedUI();
+  }
+  function restoreSavedFile() {
+    try { var f = JSON.parse(localStorage.getItem(SAVED_KEY) || "null"); savedFile = f && f.id ? f : null; } catch (e) { savedFile = null; }
+  }
+  function initGoogleUI() {
+    var ready = googleReady();
+    document.querySelectorAll(".google-only").forEach(function (e) { e.hidden = !ready; });
+    renderSavedUI();
+  }
+  function renderSavedUI() {
+    if (!googleReady()) return;
+    var linked = !!savedFile;
+    $("saved-current").hidden = !linked;
+    $("saved-current").textContent = linked ? "Showing saved scenario: " + savedFile.name : "";
+    $("btn-save").textContent = linked ? "Save changes" : "Save";
+    $("btn-save-new").hidden = !linked;
+    $("saved-link-field").hidden = !linked;
+    $("saved-link").value = linked ? G.fileLink(savedFile.id) : "";
+    if (linked) $("save-name").value = savedFile.name;
+    else if (!$("save-name").value) $("save-name").placeholder = scenarioTitle(state.inputs);
+  }
+  function savedMsg(text, kind) {
+    var m = $("saved-msg");
+    m.textContent = text || "";
+    m.className = "msg" + (kind ? " " + kind : "");
+  }
+  function googleErrorText(e) {
+    if (e && (e.code === "popup" || e.code === "signin")) return e.message;
+    if (e && e.status === 401) return "Your Google sign-in expired. Try again.";
+    if (e && e.status === 403) return "Google said no: " + (e.message || "no access") + ".";
+    if (e && e.status) return "Google answered with an error (" + e.status + "). Try again.";
+    return "Couldn't reach Google. Check your connection and try again.";
+  }
   function openSavedFile(fileId) {
-    if (window.ShowApp && window.ShowApp.openSavedFile) return window.ShowApp.openSavedFile(fileId);
-    toast("Saved scenarios aren't set up on this page yet.", "err");
+    if (!googleReady()) { toast("Saved scenarios aren't set up on this page yet.", "err"); return; }
+    toast("Opening the saved scenario…");
+    G.loadScenario(fileId).then(function (raw) {
+      var p = G.parsePayload(raw, M);
+      if (!p) throw new Error("not a scenario");
+      openShared({ inputs: p.inputs, n: p.n }, "Opened saved scenario");
+      setSavedFile({ id: fileId, name: p.name });
+      toast("Opened " + p.name + ".", "ok");
+    }).catch(function (e) {
+      toast(e && (e.status === 404 || e.status === 403) ? "That saved scenario isn't shared, or it was deleted." :
+        e && e.message === "not a scenario" ? "That file isn't a saved scenario." :
+        e && e.status ? "Google couldn't open that saved scenario: " + e.message :
+        "Couldn't open that saved scenario. Check your connection and try again.", "err");
+    });
+  }
+  function onSave(asNew) {
+    var name = $("save-name").value.trim() || scenarioTitle(state.inputs);
+    var target = asNew || !savedFile ? null : savedFile.id;
+    var payload = G.buildPayload(state.inputs, state.n, name, M);
+    savedMsg(G.hasToken() ? "Saving…" : "Sign in to Google in the window that opens…");
+    G.ensureToken().then(function () {
+      savedMsg("Saving…");
+      return G.saveScenario(payload, target);
+    }).then(function (res) {
+      setSavedFile({ id: res.id, name: name });
+      savedMsg(res.copied ? "You can't save over that one, so it was saved as your own copy with a new link." :
+        target ? "Saved changes. The link stays the same." : "Saved. Copy the link below to share it.", "ok");
+    }).catch(function (e) { savedMsg(googleErrorText(e), "err"); });
+  }
+  function onListSaved() {
+    var list = $("saved-list");
+    savedMsg(G.hasToken() ? "Loading…" : "Sign in to Google in the window that opens…");
+    G.ensureToken().then(function () { savedMsg("Loading…"); return G.listSaved(); }).then(function (files) {
+      list.textContent = "";
+      files.forEach(function (f) {
+        list.appendChild(el("li", {}, [
+          el("span", { className: "saved-name", text: f.name }),
+          el("span", { className: "saved-date", text: new Date(f.modifiedTime).toLocaleDateString() }),
+          el("button", { type: "button", className: "small", dataset: { open: f.id }, "aria-label": "Open " + f.name, text: "Open" }),
+          el("button", { type: "button", className: "small", dataset: { copy: f.id }, "aria-label": "Copy link to " + f.name, text: "Copy link" })
+        ]));
+      });
+      list.hidden = !files.length;
+      savedMsg(files.length ? "" : "Nothing saved from this page yet.");
+    }).catch(function (e) { savedMsg(googleErrorText(e), "err"); });
+  }
+  // Build the same workbook as the download, upload it to Drive as a Google Sheet, and open it.
+  function onOpenInSheets() {
+    if (exporting || !last) return;
+    var btn = $("btn-gsheet");
+    var inputs = M.sanitize(state.inputs), n = state.n, date = X.localDate(new Date());
+    var name = X.fileName(inputs, date);
+    // Already signed in: open the tab inside this click so pop-up blockers allow it.
+    var win = null;
+    if (G.hasToken()) {
+      win = window.open("", "_blank");
+      if (win) { try { win.document.title = "Creating your Google Sheet…"; win.document.body.textContent = "Creating your Google Sheet…"; } catch (e) { /* cross-origin */ } }
+    }
+    exporting = true;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    $("export-ready").hidden = true;
+    exportMsg(G.hasToken() ? "Creating your Google Sheet…" : "Sign in to Google in the window that opens…", "");
+    function release() { exporting = false; btn.disabled = false; btn.removeAttribute("aria-busy"); }
+    G.ensureToken().then(function () {
+      exportMsg("Creating your Google Sheet…", "");
+      return loadExcel();
+    }).then(function (ExcelJS) {
+      return WB.writeWorkbook(ExcelJS, WB.buildSheets(inputs, n, M, { date: date })).xlsx.writeBuffer();
+    }).then(function (buf) {
+      return G.uploadAsSheet(new Blob([buf], { type: XLSX_MIME }), name);
+    }).then(function (res) {
+      var box = $("export-ready");
+      box.textContent = "";
+      box.appendChild(el("a", { href: res.url, target: "_blank", rel: "noopener" }, ["Open your Google Sheet"]));
+      box.hidden = false;
+      if (win && !win.closed) { win.location.href = res.url; exportMsg("Your Google Sheet is open in a new tab.", "ok"); }
+      else exportMsg("Your Google Sheet is ready in your Drive.", "ok");
+    }).catch(function (e) {
+      if (win && !win.closed) win.close();
+      exportMsg(e && e.message === "ExcelJS failed to load" ? "Couldn't load the spreadsheet library. Check your connection and try again." : googleErrorText(e), "err");
+      if (window.console) console.warn("Google Sheets:", e);
+    }).then(release);
   }
   function loadFromBox() {
     var raw = $("load-code").value;
@@ -1158,10 +1292,12 @@
 
   // ---------------------------------------------------------------- start
   restore();
+  restoreSavedFile();
   buildInputs();
   syncControls();
   wire();
   trackVerdictHeight();
+  initGoogleUI();
   var linkHash = /^#(s|f)=/.test(location.hash || "") ? location.hash : null;
   initSections(); // replaces a link hash with the section name, so a refresh keeps the visitor's edits
   if (linkHash) openLinkText(linkHash); else restoreUndo();
