@@ -131,8 +131,17 @@
     insurance: 357,
     contingencyPct: 5,
     custom: [],               // [{ name, amount }]
-    otherIncome: 0
+    otherIncome: 0,
+    // Offer (padded) version: overrides for OFFER_KEYS, plus cost lines only the offer has.
+    offerAmounts: {},         // { key: amount }; a missing key means "same as the real number"
+    offerExtra: []            // [{ name, amount }]
   };
+
+  // Costs the offer can pad, in display order. A cost that is off stays off in the offer.
+  var OFFER_KEYS = ["hlTravel", "hlHospitality", "supportPrice", "vj", "soundTechPay", "stagehandPay",
+    "security", "sound", "gear", "photo", "ads", "poster", "insurance", "venueRental"];
+  var OFFER_TOGGLE = { vj: "vjOn", soundTechPay: "soundTechsOn", stagehandPay: "stagehandsOn", security: "securityOn",
+    sound: "soundOn", gear: "gearOn", insurance: "insuranceOn", venueRental: "venueRentalOn" };
 
   // Ticket count the slider starts at for the default scenario.
   var DEFAULT_N = 105;
@@ -186,13 +195,23 @@
     Object.keys(DEFAULTS).forEach(function (k) {
       var d = DEFAULTS[k];
       var v = src[k];
-      if (k === "custom") {
-        out.custom = Array.isArray(v)
+      if (k === "custom" || k === "offerExtra") {
+        out[k] = Array.isArray(v)
           ? v.slice(0, 50).map(function (r) {
               r = r && typeof r === "object" ? r : {};
               return { name: String(r.name == null ? "" : r.name).slice(0, 80), amount: Math.max(0, num(r.amount, 0)) };
             })
           : [];
+      } else if (k === "offerAmounts") {
+        out.offerAmounts = {};
+        if (v && typeof v === "object" && !Array.isArray(v)) {
+          OFFER_KEYS.forEach(function (ok) {
+            var x = v[ok];
+            if (x === null || x === undefined || x === "") return;
+            x = typeof x === "number" ? x : parseFloat(x);
+            if (isFinite(x)) out.offerAmounts[ok] = Math.max(0, x);
+          });
+        }
       } else if (ENUMS[k]) {
         out[k] = ENUMS[k].indexOf(v) >= 0 ? v : d;
       } else if (typeof d === "boolean") {
@@ -366,6 +385,27 @@
     Object.keys(lines).forEach(function (k) { base += lines[k]; });
     var contingency = base * inp.contingencyPct / 100;
     return { lines: lines, base: base, contingency: contingency, total: base + contingency };
+  }
+
+  // The offer scenario: overrides applied (only to costs that are on), offer-only lines after the custom ones.
+  function offerInputs(inputs) {
+    var inp = sanitize(inputs);
+    var out = JSON.parse(JSON.stringify(inp));
+    OFFER_KEYS.forEach(function (k) {
+      if (!(k in inp.offerAmounts)) return;
+      if (OFFER_TOGGLE[k] && !inp[OFFER_TOGGLE[k]]) return;
+      out[k] = inp.offerAmounts[k];
+    });
+    out.custom = inp.custom.concat(inp.offerExtra);
+    out.offerAmounts = {};
+    out.offerExtra = [];
+    return out;
+  }
+
+  // Fixed costs the offer adds, before contingency.
+  function offerDelta(inputs) {
+    var inp = sanitize(inputs);
+    return fixedCosts(offerInputs(inp)).base - fixedCosts(inp).base;
   }
 
   function basisValue(ts, basis) {
@@ -581,6 +621,10 @@
     breakEven: breakEven,
     headlinerBreakEven: headlinerBreakEven,
     breakEvenPrice: breakEvenPrice,
-    withPrice: withPrice
+    withPrice: withPrice,
+    OFFER_KEYS: OFFER_KEYS,
+    OFFER_TOGGLE: OFFER_TOGGLE,
+    offerInputs: offerInputs,
+    offerDelta: offerDelta
   };
 });

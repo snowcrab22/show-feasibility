@@ -93,7 +93,9 @@
     insurance: 357,
     contingencyPct: 5,
     custom: [],
-    otherIncome: 0
+    otherIncome: 0,
+    offerAmounts: Object.freeze({}),
+    offerExtra: Object.freeze([])
   });
 
   // ---------------------------------------------------------------- formatting (shared with app.js)
@@ -246,6 +248,26 @@
     { id: "insurance", title: "Insurance", rows: [
       { k: "insurance", toggle: "insuranceOn", label: "Event insurance" }
     ] }
+  ];
+  // Costs the offer version can pad (same order as M.OFFER_KEYS). mult: people or slots the amount is per.
+  function one() { return 1; }
+  function always() { return true; }
+  function flag(k) { return function (s) { return !!s[k]; }; }
+  var OFFER_ROWS = [
+    { key: "hlTravel", label: "Headliner travel / hotel", on: always, mult: one },
+    { key: "hlHospitality", label: "Headliner hospitality / rider", on: always, mult: one },
+    { key: "supportPrice", label: "Supporting artists, per slot", on: function (s) { return s.supportSlots > 0; }, mult: function (s) { return s.supportSlots; } },
+    { key: "vj", label: "VJ", on: flag("vjOn"), mult: one },
+    { key: "soundTechPay", label: "Sound techs, pay each", on: flag("soundTechsOn"), mult: function (s) { return s.soundTechs; } },
+    { key: "stagehandPay", label: "Stagehands, pay each", on: flag("stagehandsOn"), mult: function (s) { return s.stagehands; } },
+    { key: "security", label: "Contracted security", on: flag("securityOn"), mult: one },
+    { key: "sound", label: "Sound rental", on: flag("soundOn"), mult: one },
+    { key: "gear", label: "Additional deck / gear", on: flag("gearOn"), mult: one },
+    { key: "photo", label: "Photo / video", on: always, mult: one },
+    { key: "ads", label: "Advertising budget", on: always, mult: one },
+    { key: "poster", label: "Poster design", on: always, mult: one },
+    { key: "insurance", label: "Event insurance", on: flag("insuranceOn"), mult: one },
+    { key: "venueRental", label: "Venue flat rental / fee", on: flag("venueRentalOn"), mult: one }
   ];
   var CONTINGENCY_HINT = "% of all other costs, not counting headliner %, per-ticket, versus or backend pay, the venue's % of door or the per-head fee.";
 
@@ -537,7 +559,8 @@
   // Readable links the spreadsheet builds with formulas: PAGE_URL#q=n=105&price=27.5&taxOn=0&c1=Fog~40.
   // Only inputs that differ from LINK_BASE; booleans are 1/0, percents are whole numbers (29 = 29%),
   // c<i>=name~amount are custom lines. ebPreset and hlPreset aren't sent: they're worked out again.
-  var Q_SKIP = { ebPreset: 1, hlPreset: 1, custom: 1 };
+  // o_<key>=amount are offer overrides and x<i>=name~amount are offer-only lines.
+  var Q_SKIP = { ebPreset: 1, hlPreset: 1, custom: 1, offerAmounts: 1, offerExtra: 1 };
   function qEnc(s) {
     return String(s).replace(/%/g, "%25").replace(/&/g, "%26").replace(/#/g, "%23").replace(/=/g, "%3D")
       .replace(/~/g, "%7E").replace(/ /g, "%20").replace(/\+/g, "%2B").replace(/"/g, "%22");
@@ -554,25 +577,32 @@
       out += "&" + k + "=" + v;
     });
     inp.custom.forEach(function (c, i) { out += "&c" + (i + 1) + "=" + qEnc(c.name) + "~" + qNum(c.amount, 2); });
+    M.OFFER_KEYS.forEach(function (k) { if (k in inp.offerAmounts) out += "&o_" + k + "=" + qNum(inp.offerAmounts[k], 2); });
+    inp.offerExtra.forEach(function (c, i) { out += "&x" + (i + 1) + "=" + qEnc(c.name) + "~" + qNum(c.amount, 2); });
     return PAGE_URL + "#q=" + out;
   }
   function decodeQuery(q, M) {
-    var obj = {}, custom = [], n = 0;
+    var obj = {}, custom = [], extra = [], offer = {}, n = 0;
+    function line(list, idx, v) { var t = v.lastIndexOf("~"); list.push({ i: idx, name: t < 0 ? v : v.slice(0, t), amount: t < 0 ? 0 : parseFloat(v.slice(t + 1)) || 0 }); }
     q.split("&").forEach(function (part) {
       var i = part.indexOf("=");
       if (i < 1) return;
       var k = part.slice(0, i), v = part.slice(i + 1);
       try { v = decodeURIComponent(v); } catch (e) { /* keep as typed */ }
-      var cm = /^c(\d+)$/.exec(k);
+      var cm = /^c(\d+)$/.exec(k), xm = /^x(\d+)$/.exec(k), om = /^o_(\w+)$/.exec(k);
       if (k === "n") n = Math.max(0, Math.round(+v) || 0);
-      else if (cm) { var t = v.lastIndexOf("~"); custom.push({ i: +cm[1], name: t < 0 ? v : v.slice(0, t), amount: t < 0 ? 0 : parseFloat(v.slice(t + 1)) || 0 }); }
+      else if (cm) line(custom, +cm[1], v);
+      else if (xm) line(extra, +xm[1], v);
+      else if (om) offer[om[1]] = parseFloat(v);
       else if (Object.prototype.hasOwnProperty.call(M.DEFAULTS, k) && !Q_SKIP[k]) {
         var d = M.DEFAULTS[k];
         obj[k] = typeof d === "boolean" ? v === "1" || v === "true" : typeof d === "number" ? parseFloat(v) : v;
       }
     });
-    custom.sort(function (a, b) { return a.i - b.i; });
-    var raw = Object.assign({}, LINK_BASE, obj, { custom: custom.map(function (c) { return { name: c.name, amount: c.amount }; }) });
+    function byI(a, b) { return a.i - b.i; }
+    function plain(c) { return { name: c.name, amount: c.amount }; }
+    custom.sort(byI); extra.sort(byI);
+    var raw = Object.assign({}, LINK_BASE, obj, { custom: custom.map(plain), offerExtra: extra.map(plain), offerAmounts: offer });
     delete raw.ebPreset; // sanitize works it out from the three rates
     var inp = M.sanitize(raw);
     inp.hlPreset = M.detectPreset(inp);
@@ -640,6 +670,6 @@
     bundle: bundle, headlineRows: headlineRows, moneyRows: moneyRows, scenarioRows: scenarioRows, heatGrid: heatGrid, mixOklab: mixOklab, heatColor: heatColor,
     perTicketRows: perTicketRows, ticketMoneyRows: ticketMoneyRows, headlinerRows: headlinerRows, talentRows: talentRows, venueRows: venueRows,
     costCategoryRows: costCategoryRows,
-    encodeScenario: encodeScenario, LINK_BASE: LINK_BASE, encodeLink: encodeLink, encodeQueryLink: encodeQueryLink, decodeShared: decodeShared, localDate: localDate, fileName: fileName
+    encodeScenario: encodeScenario, OFFER_ROWS: OFFER_ROWS, LINK_BASE: LINK_BASE, encodeLink: encodeLink, encodeQueryLink: encodeQueryLink, decodeShared: decodeShared, localDate: localDate, fileName: fileName
   };
 });

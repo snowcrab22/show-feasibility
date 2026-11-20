@@ -210,6 +210,16 @@
     var pctBasisAtStart = pctThr > 0 ? basisValue(rs[Math.min(pctThr, S)], inp.hlPctBasis) : 0;
     var guaranteeAmt = inp.hlGuaranteeOn ? inp.hlGuarantee : 0;
     var talentTotal = h.total + L.support + L.vj;
+    // Offer (padded) version: same tickets and deal, offer cost amounts (M.offerInputs).
+    var offerInp = M.offerInputs(inp);
+    var oHLBE = M.headlinerBreakEven(offerInp);
+    var oAt = M.compute(offerInp, n, { hlBE: oHLBE }), oSO = M.compute(offerInp, S, { hlBE: oHLBE });
+    var oDelta = oAt.fixedCostsTotal - r.fixedCostsTotal, OL = oAt.costs;
+    var oPctThr = threshold(inp.hlPctStart, inp.hlPctStartN, oHLBE);
+    var oPtThr = threshold(inp.hlPerTicketStart, inp.hlPerTicketStartN, oHLBE);
+    var oPctBasisAtStart = oPctThr > 0 ? basisValue(rs[Math.min(oPctThr, S)], inp.hlPctBasis) : 0;
+    var offerLinesSum = inp.offerExtra.reduce(function (s2, x2) { return s2 + x2.amount; }, 0);
+    var rS = rs[S];
     var laborAmt = L.soundTechs + L.stagehands;
     var inflow = r.inflow;
     var pt = ptValues(r.perTicketPrices);
@@ -340,6 +350,27 @@
     inRow("Other income (merch, sponsor)", yMoney(inp.otherIncome, "OtherIncome"));
     I.add([]);
 
+    // Offer (padded) costs: blank means "same as the amount above".
+    heading(I, "Offer (padded costs)", 4);
+    I.add([null, txt("What the offer shows the artist. Leave a cell blank to use the amount above; a cost that's off stays off.", "muted", { span: 4, wrap: true })]);
+    X.OFFER_ROWS.forEach(function (o) {
+      var ov = inp.offerAmounts[o.key];
+      inRow("Offer: " + o.label.charAt(0).toLowerCase() + o.label.slice(1),
+        cell(ov === undefined ? null : ov, "money", "input", { name: "Offer_" + o.key, dv: { type: "min0" } }), null, "Blank = same as above.");
+    });
+    I.add([null, txt("Offer-only lines", "subhead"), txt("Amount", "subhead", { align: "right" })]);
+    var offerLineRows = inp.offerExtra.map(function (c) { return { name: c.name, amount: c.amount }; });
+    for (var ob = 0; ob < BLANK_CUSTOM_ROWS; ob++) offerLineRows.push({ name: "", amount: null });
+    var oFirst = 0, oLast = 0;
+    offerLineRows.forEach(function (c, i) {
+      var row = I.add([null, cell(c.name, "text", "input", { name: "OfferLine_" + (i + 1) + "_Name" }),
+        cell(c.amount, "money", "input", { name: "OfferLine_" + (i + 1) + "_Amount", dv: { type: "min0" } })]);
+      if (!oFirst) oFirst = row;
+      oLast = row;
+    });
+    I.range("OfferLineAmounts", 3, oFirst, oLast);
+    I.add([]);
+
     // Link back to the calculator: PAGE_URL#q=n=..&key=value for every input that differs from LINK_BASE.
     heading(I, "Link back to the calculator", 4);
     I.add([null, linkCell()]);
@@ -382,6 +413,16 @@
       return "IF(AND(" + nm + '="",' + am + '=""),"","&c' + (i + 1) + '="&' + urlEnc(nm + '&""') + '&"~"&ROUND(N(' + am + "),2))";
     });
     for (var ci2 = 0; ci2 < custParts.length; ci2 += 8) linkParts.push(custParts.slice(ci2, ci2 + 8).join("&")); // keeps each formula well under Excel's 8,192 characters
+    var offerParts = X.OFFER_ROWS.map(function (o) {
+      var nm = "Offer_" + o.key;
+      return "IF(" + nm + '="","","&o_' + o.key + '="&ROUND(N(' + nm + "),2))";
+    });
+    for (var op = 0; op < offerParts.length; op += 7) linkParts.push(offerParts.slice(op, op + 7).join("&"));
+    var lineParts = offerLineRows.map(function (c, i) {
+      var nm = "OfferLine_" + (i + 1) + "_Name", am = "OfferLine_" + (i + 1) + "_Amount";
+      return "IF(AND(" + nm + '="",' + am + '=""),"","&x' + (i + 1) + '="&' + urlEnc(nm + '&""') + '&"~"&ROUND(N(' + am + "),2))";
+    });
+    for (var lp = 0; lp < lineParts.length; lp += 8) linkParts.push(lineParts.slice(lp, lp + 8).join("&"));
     var partNames = [];
     linkParts.forEach(function (f, i) {
       partNames.push("Link_Part_" + (i + 1));
@@ -434,7 +475,8 @@
       ["nbb", "Net before backend", 14, "work", "money"],
       ["backend", "Backend", 11, "work", "money"],
       ["baseFlag", "Past headliner break-even", 10, "work", "int"],
-      ["netFlag", "Past show break-even", 10, "work", "int"]
+      ["netFlag", "Past show break-even", 10, "work", "int"],
+      ["offerFlag", "Past offer break-even", 10, "work", "int"]
     ];
     var C = {};
     COLS.forEach(function (c, i) { C[c[0]] = i + 1; });
@@ -448,7 +490,7 @@
       fx("MIN(MAX(ROUND(TicketsSold,0),0),Sellable)", n, "int", "total", { name: "ChosenN" }), txt("From Tickets sold on Inputs.", "muted", { span: 4 })]);
     B.add([txt("Results", "band", { span: 9 }), null, null, null, null, null, null, null, null, null,
       txt("Ticket side", "band", { span: 13, fill: "#ecebe6" }), null, null, null, null, null, null, null, null, null, null, null, null,
-      txt("Headliner and profit", "band", { span: 9 })]);
+      txt("Headliner and profit", "band", { span: 10 })]);
     var head = B.add(COLS.map(function (c) {
       if (c[0] === "gap") return null;
       if (c[0] === "fees") return fx(platF("", " fees"), pn + " fees", "text", "colhead", { wrap: true, align: "right" });
@@ -498,7 +540,8 @@
         nbb: fx(g(ref("ntr") + "+OtherIncome-FixedTotal-(" + ref("deal") + "-GuaranteeAmt)"), v(x && x.netBeforeBackend), "money", "work"),
         backend: fx(g(capBackend('IF(HLBackendOn="On",MAX(0,' + ref("nbb") + ")*HLBackendPct,0)", ref("deal"))), v(x && x.headliner.backend), "money", "work"),
         baseFlag: fx(g("IF(" + ref("base") + ">=-" + EPS + ",1,0)"), v(base >= -1e-9 ? 1 : 0), "int", "work"),
-        netFlag: fx(g("IF(" + ref("net") + ">=-" + EPS + ",1,0)"), v(x && x.net >= -1e-9 ? 1 : 0), "int", "work")
+        netFlag: fx(g("IF(" + ref("net") + ">=-" + EPS + ",1,0)"), v(x && x.net >= -1e-9 ? 1 : 0), "int", "work"),
+        offerFlag: fx(g("IF(" + ref("base") + "-OfferDelta>=-" + EPS + ",1,0)"), v(x ? (base - oDelta >= -1e-9 ? 1 : 0) : ""), "int", "work")
       };
       COLS.forEach(function (c) { row.push(vals2[c[0]]); });
       B.add(row);
@@ -507,7 +550,7 @@
       n: "ByT_Tickets", online: "ByT_Online", door: "ByT_Door", paid: "ByT_BuyersPaid", ntr: "ByT_NTR", hlpay: "ByT_HLPay", costs: "ByT_TotalCosts", net: "ByT_Net",
       doorCard: "ByT_DoorCard", gross: "ByT_GrossFace", faceNet: "ByT_FaceNet", tax: "ByT_Tax", fees: "ByT_Fees", passed: "ByT_FeesPassed", absorbed: "ByT_FeesAbsorbed",
       doorProc: "ByT_DoorProc", cutBasis: "ByT_CutBasis", doorCut: "ByT_DoorCut", perHead: "ByT_PerHead", paidOn: "ByT_PaidOnline", paidDoor: "ByT_PaidDoor",
-      basis: "ByT_HLBasis", pctPart: "ByT_PctPart", ptPart: "ByT_PerTicketPart", deal: "ByT_DealPay", backend: "ByT_Backend", baseFlag: "ByT_BaseFlag", netFlag: "ByT_NetFlag"
+      basis: "ByT_HLBasis", pctPart: "ByT_PctPart", ptPart: "ByT_PerTicketPart", deal: "ByT_DealPay", backend: "ByT_Backend", baseFlag: "ByT_BaseFlag", netFlag: "ByT_NetFlag", offerFlag: "ByT_OfferFlag"
     };
     Object.keys(BYT).forEach(function (key) { B.range(BYT[key], C[key], r0, rN); });
     B.signCF("$" + L$("net") + "$" + r0 + ":$" + L$("net") + "$" + rN);
@@ -590,6 +633,36 @@
      ["Custom", "CustomAmt", L.custom],
      ["Contingency", "Contingency", r.contingency]].forEach(function (c) { Co.add([null, txt(c[0], "label"), fx(c[1], c[2], "money", "label")]); });
     Co.add([null, txt("Total costs", "total"), fx("TotalCostsAtCount", r.totalCosts, "money", "total")]);
+    Co.add([]);
+
+    heading(Co, "Offer (padded) costs");
+    Co.add([null, txt("What the offer shows the artist. Offer cells left blank on Inputs use the amounts above.", "muted", { span: 3, wrap: true })]);
+    function eff(key, trueName) { return 'IF(Offer_' + key + '="",' + trueName + ",Offer_" + key + ")"; }
+    function onEff(flag, key, trueName, people) { return "IF(" + flag + '="On",' + (people ? people + "*" : "") + eff(key, trueName) + ",0)"; }
+    group("Offer amounts");
+    line("Headliner guarantee (same as above)", "GuaranteeAmt", guaranteeAmt);
+    line("Headliner travel / hotel", eff("hlTravel", "HLTravel"), OL.headlinerTravel, "OfferTravelAmt");
+    line("Headliner hospitality / rider", eff("hlHospitality", "HLHospitality"), OL.headlinerHospitality, "OfferHospAmt");
+    line("Supporting artists (slots x price per slot)", "SupportSlots*" + eff("supportPrice", "SupportPrice"), OL.support, "OfferSupportAmt");
+    line("VJ", onEff("VJOn", "vj", "VJFee"), OL.vj, "OfferVJAmt");
+    line("Flat rental / fee", onEff("VenueRentalOn", "venueRental", "VenueRental"), OL.venueRental, "OfferVenueRentalAmt");
+    line("Sound techs (people x pay each)", onEff("SoundTechsOn", "soundTechPay", "SoundTechPay", "SoundTechs"), OL.soundTechs, "OfferSoundTechsAmt");
+    line("Stagehands (people x pay each)", onEff("StagehandsOn", "stagehandPay", "StagehandPay", "Stagehands"), OL.stagehands, "OfferStagehandsAmt");
+    line("Contracted security (flat)", onEff("SecurityOn", "security", "Security"), OL.security, "OfferSecurityAmt");
+    line("Sound rental", onEff("SoundRentalOn", "sound", "SoundRental"), OL.sound, "OfferSoundAmt");
+    line("Additional deck / gear", onEff("GearOn", "gear", "Gear"), OL.gear, "OfferGearAmt");
+    line("Photo / video", eff("photo", "Photo"), OL.photo, "OfferPhotoAmt");
+    line("Advertising budget", eff("ads", "Ads"), OL.ads, "OfferAdsAmt");
+    line("Poster design", eff("poster", "Poster"), OL.poster, "OfferPosterAmt");
+    line("Event insurance", onEff("InsuranceOn", "insurance", "Insurance"), OL.insurance, "OfferInsuranceAmt");
+    line("Custom cost lines (same as above)", "CustomAmt", L.custom);
+    line("Offer-only lines (listed on Inputs)", "SUM(OfferLineAmounts)", offerLinesSum, "OfferLinesAmt");
+    Co.add([null, txt("Offer contingency base", "label"),
+      fx("GuaranteeAmt+OfferTravelAmt+OfferHospAmt+OfferSupportAmt+OfferVJAmt+OfferVenueRentalAmt+OfferSoundTechsAmt+OfferStagehandsAmt+OfferSecurityAmt+OfferSoundAmt+OfferGearAmt+OfferPhotoAmt+OfferAdsAmt+OfferPosterAmt+OfferInsuranceAmt+CustomAmt+OfferLinesAmt",
+        oAt.contingencyBase, "money", "label", { name: "OfferFixedBase" })]);
+    Co.add([null, txt("Offer contingency", "label"), fx("OfferFixedBase*ContingencyPct", oAt.contingency, "money", "label", { name: "OfferContingency" })]);
+    Co.add([null, txt("Offer fixed costs with contingency", "subtotal"), fx("OfferFixedBase+OfferContingency", oAt.fixedCostsTotal, "money", "subtotal", { name: "OfferFixedTotal" })]);
+    Co.add([null, txt("The offer adds to fixed costs", "label"), fx("OfferFixedTotal-FixedTotal", oDelta, "money", "label", { name: "OfferDelta" })]);
 
     // ---------- Talent
     var T = new Sheet("Talent", [2, 62, 18, 40], LIGHT.s4);
@@ -803,7 +876,223 @@
     });
     Su.cf.push({ ref: "C" + gFirst + ":" + colLetter(2 + hg.prices.length) + gLast, kind: "heat" });
 
-    return [sheets.summary, sheets.inputs, sheets.tickets, sheets.venue, sheets.talent, sheets.costs, sheets.byT, sheets.pm];
+    // ---------- Offer (KC PLUR offer sheet layout) and the true / padded budgets
+    var NAVY = "#0F1226", PINK = "#FF2E94", CYAN = "#00D4F0", PINKW = "#FFE3F2", LAV = "#E8D9E8", WHITE = "#FFFFFF";
+    var DASH = '$#,##0.00;-$#,##0.00;"–"';
+    function bar(sh, text, span) { sh.add([null, txt(text, "label", { bold: true, color: WHITE, fill: NAVY, size: 11, span: span })]); }
+    function ylabel(text) { return txt(text, "muted", { bold: true }); }
+
+    var Of = new Sheet("Offer", [2, 26, 18, 16, 16, 18, 16, 16], PINK);
+    sheets.offer = Of;
+    Of.add([null, txt("KC PLUR", "label", { bold: true, color: PINK, fill: NAVY, size: 18, span: 3 }), null, null,
+      txt("ARTIST OFFER", "label", { bold: true, color: CYAN, fill: NAVY, size: 16, span: 4, align: "right" })]);
+    Of.add([null, fx("ScenarioTitle", ctx.title, "text", "label", { bold: true, span: 4 })]);
+    Of.add([null, txt("Yellow cells are fill-ins.", "muted", { span: 7 })]);
+    Of.add([null, ylabel("CONTACT"), cell("", "text", "input", { name: "OfferContact", span: 2 }), null, ylabel("OFFER DATE"), cell(ctx.date, "text", "input", { name: "OfferDate", span: 2 })]);
+    Of.add([null, ylabel("PHONE"), cell("", "text", "input", { name: "OfferPhone", span: 2 }), null, ylabel("OFFER #"), cell("", "text", "input", { name: "OfferNumber", span: 2 })]);
+    Of.add([null, ylabel("EMAIL"), cell("", "text", "input", { name: "OfferEmail", span: 2 }), null, ylabel("STATUS"), cell("Hold", "text", "input", { name: "OfferStatus", span: 2 })]);
+    Of.add([null, null, null, null, ylabel("OFFER EXPIRES"), cell("", "text", "input", { name: "OfferExpires", span: 2 })]);
+    Of.add([]);
+    bar(Of, "01   SHOW DETAILS", 7);
+    var showNm = String(inp.showName || "").trim();
+    var supTxt = inp.supportSlots > 0 ? inp.supportSlots + " supporting artist" + (inp.supportSlots === 1 ? "" : "s") : "";
+    Of.add([null, ylabel("EVENT"), fx("TRIM(ShowName)", showNm, "text", "label", { bold: true, span: 2 }), null, ylabel("BUYER"), cell("KC PLUR", "text", "input", { name: "OfferBuyer", span: 2 })]);
+    Of.add([null, ylabel("HEADLINER"), fx("TRIM(ShowName)", showNm, "text", "label", { bold: true, span: 2 }), null, ylabel("CO-PROMOTER"), cell("", "text", "input", { name: "OfferCoPromoter", span: 2 })]);
+    Of.add([null, ylabel("SUPPORT"), fx('IF(SupportSlots>0,SupportSlots&" supporting artist"&IF(SupportSlots=1,"","s"),"")', supTxt, "text", "label", { span: 2 }), null,
+      ylabel("VENUE"), fx("TRIM(VenueName)", String(inp.venueName || "").trim(), "text", "label", { bold: true, span: 2 })]);
+    Of.add([null, ylabel("SHOW DATE"), cell("", "text", "input", { name: "OfferShowDate", span: 2 }), null, ylabel("CITY"), cell("", "text", "input", { name: "OfferCity", span: 2 })]);
+    Of.add([null, ylabel("AGENCY"), cell("", "text", "input", { name: "OfferAgency", span: 2 }), null, ylabel("CAPACITY"), fx("CapEff", inp.capacity, "int", "label", { bold: true, align: "left" })]);
+    Of.add([]);
+    bar(Of, "02   DEAL", 7);
+    Of.add([null, ylabel("GUARANTEE"), fx("GuaranteeAmt", guaranteeAmt, "money", "label", { bold: true, color: PINK, size: 14, align: "left" })]);
+    Of.add([null, ylabel("DEAL"), fx("DealText", X.hlDescription(inp), "text", "label", { bold: true, fill: PINKW, span: 6, wrap: true })]);
+    Of.add([null, ylabel("PROMOTER COVERS"), cell("Travel and hotel, and hospitality per rider", "text", "input", { name: "OfferCovers", span: 6 })]);
+    Of.add([null, ylabel("FEE INCLUDES"), cell("Agency commission", "text", "input", { name: "OfferFeeIncludes", span: 6 })]);
+    Of.add([null, ylabel("DEPOSIT"), cell("50% on signing; balance night of show", "text", "input", { name: "OfferDeposit", span: 6 })]);
+    Of.add([null, ylabel("RADIUS"), cell("Artist may not play, or be announced for, any show or festival within 80 miles of Kansas City until this show is over.", "text", "input", { name: "OfferRadius", span: 6, wrap: true })]);
+    Of.add([null, ylabel("MERCHANDISE"), cell("85/15, artist sells; 90/10 on recordings", "text", "input", { name: "OfferMerch", span: 6 })]);
+    Of.add([]);
+    bar(Of, "03   BOX OFFICE (SOLD OUT)", 7);
+    function hdr(sh, labels) { sh.add([null].concat(labels.map(function (l, i) { return txt(l, "colhead", { fill: CYAN, align: i ? "right" : "left" }); }))); }
+    function at(col, N) { return "INDEX(" + col + "," + (N || "Sellable") + "+1)"; }
+    hdr(Of, ["TIER", "TICKETS", "PRICE", "GROSS"]);
+    var dp = inp.doorPriceOn ? inp.doorPrice : inp.price;
+    Of.add([null, fx(platF("Advance (", ")"), "Advance (" + pn + ")", "text", "label"), fx(at("ByT_Online"), rS.counts.online, "int", "label"), fx("Price", inp.price, "money", "label"),
+      fx(at("ByT_Online") + "*Price", rS.counts.online * inp.price, "money", "label")]);
+    Of.add([null, txt("Door", "label"), fx(at("ByT_Door"), rS.counts.door, "int", "label"), fx("PT_DP", dp, "money", "label"), fx(at("ByT_Door") + "*PT_DP", rS.counts.door * dp, "money", "label")]);
+    Of.add([null, txt("Comps / guest list", "label"), fx("CompsEff", inp.comps, "int", "label"), txt("", "label"), cell(0, "money", "label")]);
+    Of.add([null, txt("TOTAL", "subtotal", { fill: PINKW }), fx("Sellable", S, "int", "subtotal", { fill: PINKW }),
+      fx('IF(Sellable>0,OfferGrossSellout/Sellable,0)', S ? rS.grossFace / S : 0, "money", "subtotal", { fill: PINKW }),
+      fx(at("ByT_GrossFace"), rS.grossFace, "money", "subtotal", { fill: PINKW, name: "OfferGrossSellout" })]);
+    Of.add([null, null, null, txt("avg / ticket", "muted", { align: "right" })]);
+    Of.add([]);
+    bar(Of, "04   EXPENSES", 7);
+    hdr(Of, ["ITEM", "BUDGET"]);
+    var oExp = [
+      ["Supporting artists", "OfferSupportAmt", OL.support], ["VJ", "OfferVJAmt", OL.vj], ["Sound techs", "OfferSoundTechsAmt", OL.soundTechs],
+      ["Stagehands", "OfferStagehandsAmt", OL.stagehands], ["Contracted security", "OfferSecurityAmt", OL.security], ["Sound rental", "OfferSoundAmt", OL.sound],
+      ["Additional deck / gear", "OfferGearAmt", OL.gear], ["Photo / video", "OfferPhotoAmt", OL.photo], ["Advertising", "OfferAdsAmt", OL.ads],
+      ["Poster design", "OfferPosterAmt", OL.poster], ["Event insurance", "OfferInsuranceAmt", OL.insurance], ["Venue rental / fee", "OfferVenueRentalAmt", OL.venueRental],
+      ["Headliner travel / hotel", "OfferTravelAmt", OL.headlinerTravel], ["Headliner hospitality / rider", "OfferHospAmt", OL.headlinerHospitality]
+    ];
+    // Custom and offer-only lines one by one (the lines there at export); anything added later lands in "Other costs".
+    var itemRefs = [], itemNo = 0;
+    function itemize(list, prefix) {
+      list.forEach(function (c, i) {
+        var nm = prefix + (i + 1) + "_Name", am = prefix + (i + 1) + "_Amount";
+        itemNo++;
+        itemRefs.push("N(" + am + ")");
+        oExp.push([fx("IF(TRIM(" + nm + ')="",' + str("Cost line " + itemNo) + ",TRIM(" + nm + "))", c.name || "Cost line " + itemNo, "text", "label"), "N(" + am + ")", c.amount]);
+      });
+    }
+    itemize(inp.custom, "Custom_");
+    itemize(inp.offerExtra, "OfferLine_");
+    oExp.push(["Other costs", "CustomAmt+OfferLinesAmt" + (itemRefs.length ? "-(" + itemRefs.join("+") + ")" : ""), itemRefs.length ? 0 : L.custom + offerLinesSum, "OfferOtherCosts"]);
+    oExp.push(["Contingency", "OfferContingency", oAt.contingency]);
+    oExp.forEach(function (e) { Of.add([null, typeof e[0] === "string" ? txt(e[0], "label") : e[0], fx(e[1], e[2], "money", "label", { fmt: DASH, name: e[3] })]); });
+    Of.add([null, txt("TOTAL EXPENSES", "subtotal", { fill: PINKW }), fx("OfferFixedTotal-GuaranteeAmt", oAt.fixedCostsTotal - guaranteeAmt, "money", "subtotal", { fill: PINKW })]);
+    Of.add([null, txt("Not counting the guarantee, which is the artist's.", "muted", { span: 4 })]);
+    Of.add([]);
+    bar(Of, "05   SETTLEMENT AT SELL-OUT", 7);
+    hdr(Of, ["LINE", "AMOUNT"]);
+    var taxOut = rS.faceNet - rS.grossFace;
+    var setl = [
+      ["Gross potential", at("ByT_GrossFace"), rS.grossFace],
+      ["Sales tax inside the price", at("ByT_FaceNet") + "-" + at("ByT_GrossFace"), taxOut],
+      ["Ticketing fees we absorb", "-" + at("ByT_FeesAbsorbed"), -rS.eventbrite.absorbed],
+      ["Door card processing", "-" + at("ByT_DoorProc"), -rS.doorProc],
+      ["Venue % of door", "-" + at("ByT_DoorCut"), -rS.doorCut],
+      ["Venue per-head fee", "-" + at("ByT_PerHead"), -rS.venue.perHead]
+    ];
+    setl.forEach(function (e) { Of.add([null, txt(e[0], "label"), fx(e[1], e[2], "money", "label", { fmt: DASH })]); });
+    Of.add([null, txt("NET GROSS RECEIPTS", "subtotal"), fx(at("ByT_NTR"), rS.netTicketRevenue, "money", "subtotal")]);
+    Of.add([null, txt("Other income (merch, sponsor)", "label"), fx("OtherIncome", inp.otherIncome, "money", "label", { fmt: DASH })]);
+    Of.add([null, txt("Expenses (section 04)", "label"), fx("-(OfferFixedTotal-GuaranteeAmt)", -(oAt.fixedCostsTotal - guaranteeAmt), "money", "label")]);
+    Of.add([null, txt("NET SHOW RECEIPTS", "subtotal", { fill: PINKW }),
+      fx(at("ByT_NTR") + "+OtherIncome-(OfferFixedTotal-GuaranteeAmt)", oSO.net + oSO.headliner.pay, "money", "subtotal", { fill: PINKW, name: "OfferNSR" })]);
+    Of.add([null, txt("What's left to pay the artist and the promoter.", "muted", { span: 4 })]);
+    Of.add([]);
+    bar(Of, "06   OFFER SUMMARY", 7);
+    var beTxt = oHLBE === null ? "never" : oHLBE + " tickets";
+    Of.add([null, txt("GUARANTEE", "label", { bold: true, color: CYAN, fill: NAVY }), txt("ARTIST, SOLD OUT", "label", { bold: true, color: CYAN, fill: NAVY, span: 2 }), null,
+      txt("PROMOTER, SOLD OUT", "label", { bold: true, color: CYAN, fill: NAVY, span: 2 }), null, txt("BREAK-EVEN", "label", { bold: true, color: CYAN, fill: NAVY })]);
+    Of.add([null, fx("GuaranteeAmt", guaranteeAmt, "money", "label", { bold: true, size: 14, color: WHITE, fill: NAVY }),
+      fx("OfferPayAtSellout", oSO.headliner.pay, "money", "label", { bold: true, size: 14, color: PINK, fill: NAVY, span: 2, name: "OfferArtistSellout" }), null,
+      fx("OfferNetAtSellout", oSO.net, "money", "label", { bold: true, size: 14, color: WHITE, fill: NAVY, span: 2, name: "OfferPromoterSellout" }), null,
+      fx('IF(ISNUMBER(OfferHLBreakEven),OfferHLBreakEven&" tickets","never")', beTxt, "text", "label", { bold: true, size: 14, color: CYAN, fill: NAVY, align: "right" })]);
+    Of.add([null, txt("Flat", "muted", { color: WHITE, fill: NAVY }), txt("Guarantee plus bonus", "muted", { color: WHITE, fill: NAVY, span: 2 }), null,
+      txt("Net show receipts less artist", "muted", { color: WHITE, fill: NAVY, span: 2 }), null, txt("Before the bonus", "muted", { color: WHITE, fill: NAVY, align: "right" })]);
+    // The offer math lives on Costs (names are global), so the Offer tab stays clean to send.
+    Co.add([]);
+    heading(Co, "Offer working values");
+    function wrow(label, f, val, name, t) { Co.add([null, txt(label, "label"), fx(f, val, t || "money", "work", name ? { name: name } : undefined)]); }
+    wrow("Offer headliner break-even (tickets)", 'IFERROR(MATCH(1,ByT_OfferFlag,0)-1,"never")', oHLBE === null ? "never" : oHLBE, "OfferHLBreakEven", "auto");
+    wrow("% part threshold (tickets)", startF("HLPctStart", "HLPctStartN", "OfferHLBreakEven"), oPctThr, "OfferPctThreshold", "int");
+    wrow("$ per ticket part threshold (tickets)", startF("HLPerTicketStart", "HLPerTicketStartN", "OfferHLBreakEven"), oPtThr, "OfferPerTicketThreshold", "int");
+    wrow("% basis at the threshold", "IF(OfferPctThreshold>0,INDEX(ByT_HLBasis,MIN(OfferPctThreshold,Sellable)+1),0)", oPctBasisAtStart, "OfferPctBasisAtStart");
+    function offerDeal(N, sfx, res, label) {
+      var p = "Offer" + sfx + "_";
+      wrow(label + ": % part", 'IF(AND(HLPctOn="On",' + N + ">OfferPctThreshold),MAX(0,INDEX(ByT_HLBasis," + N + "+1)-OfferPctBasisAtStart)*HLPct,0)", res.headliner.pctPart, p + "Pct");
+      wrow(label + ": $ per ticket part", 'IF(HLPerTicketOn="On",MAX(0,' + N + "-OfferPerTicketThreshold)*HLPerTicket,0)", res.headliner.perTicketPart, p + "PT");
+      wrow(label + ": deal pay", capDeal('IF(HLVersus="Yes",MAX(GuaranteeAmt,' + p + "Pct+" + p + "PT),GuaranteeAmt+" + p + "Pct+" + p + "PT)"), res.headliner.dealPay, p + "Deal");
+      wrow(label + ": net before backend", "INDEX(ByT_NTR," + N + "+1)+OtherIncome-OfferFixedTotal-(" + p + "Deal-GuaranteeAmt)", res.netBeforeBackend, p + "NBB");
+      wrow(label + ": backend", capBackend('IF(HLBackendOn="On",MAX(0,' + p + "NBB)*HLBackendPct,0)", p + "Deal"), res.headliner.backend, p + "Backend");
+      wrow(label + ": headliner pay", p + "Deal+" + p + "Backend", res.headliner.pay, "OfferPayAt" + sfx);
+      wrow(label + ": net", p + "NBB-" + p + "Backend", res.net, "OfferNetAt" + sfx);
+    }
+    offerDeal("ChosenN", "Count", oAt, "At the chosen count");
+    offerDeal("Sellable", "Sellout", oSO, "Sold out");
+
+    // Budgets: everything on one tab, like the Atlas9 run of show and the Enter the Abyss budget.
+    function budget(kind) {
+      var off = kind === "offer";
+      var Bu = new Sheet(off ? "Padded budget" : "True budget", [2, 30, 30, 16, 9, 44], off ? PINK : LIGHT.accent);
+      Bu.add([null, fx('ScenarioTitle&" budget (' + (off ? "padded, for the offer" : "true") + ')"', ctx.title + " budget (" + (off ? "padded, for the offer" : "true") + ")", "text", "title", { span: 5 })]);
+      Bu.add([null, txt(off ? "The costs the offer shows. Change them in the Offer section of Inputs." : "Your real numbers. Change them on Inputs.", "muted", { span: 5 })]);
+      Bu.add([null, txt("Yellow cells are fill-ins: who gets paid and whether they're paid.", "muted", { span: 5 })]);
+      Bu.add([]);
+      var res = off ? oAt : r;
+      function kv(label, f, val, t) { Bu.add([null, txt(label, "label", { bold: true }), fx(f, val, t, "label", { align: "right" })]); }
+      kv("Tickets sold", "ChosenN", n, "int");
+      kv("Online price", "Price", inp.price, "money");
+      kv("Door price", "PT_DP", dp, "money");
+      kv("Sales tax rate", "TaxR", inp.taxOn ? inp.taxRate / 100 : 0, "pct");
+      var beV = off ? oHLBE : hlBE;
+      kv("Break-even before bonus", off ? "OfferHLBreakEven" : "HLBreakEven", beV === null ? "never" : beV, "auto");
+      Bu.add([]);
+      function bbar(text) { Bu.add([null, txt(text, "label", { bold: true, color: WHITE, fill: NAVY, size: 11, span: 5 })]); }
+      function bhead(labels) { Bu.add([null].concat(labels.map(function (l) { return txt(l, "label", { bold: true, fill: LAV }); }))); }
+      bbar("Ticket sales");
+      bhead(["Channel", "Tickets", "Price", "", "Revenue after tax"]);
+      Bu.add([null, fx(platF("Online (", ")"), "Online (" + pn + ")", "text", "label"), fx(idx("ByT_Online"), r.counts.online, "int", "label"), fx("Price", inp.price, "money", "label"), null,
+        fx(idx("ByT_Online") + "*PT_fn", r.counts.online * r.perTicketPrices.faceNet, "money", "label")]);
+      Bu.add([null, txt("Door", "label"), fx(idx("ByT_Door"), r.counts.door, "int", "label"), fx("PT_DP", dp, "money", "label"), null,
+        fx(idx("ByT_Door") + "*PT_dfn", r.counts.door * r.perTicketPrices.doorFaceNet, "money", "label")]);
+      Bu.add([null, txt("Total", "subtotal"), fx("ChosenN", n, "int", "subtotal"), txt("", "subtotal"), txt("", "subtotal"), fx(idx("ByT_FaceNet"), r.faceNet, "money", "subtotal")]);
+      Bu.add([]);
+      bbar("Expenses");
+      bhead(["Payee", "Role", "Amount", "Paid", "Notes"]);
+      var hl = showNm || "Headliner", ven = String(inp.venueName || "").trim() || "Venue";
+      var A = off ? { travel: "OfferTravelAmt", hosp: "OfferHospAmt", sup: "OfferSupportAmt", vj: "OfferVJAmt", st: "OfferSoundTechsAmt", sh: "OfferStagehandsAmt", sec: "OfferSecurityAmt",
+                      snd: "OfferSoundAmt", gear: "OfferGearAmt", photo: "OfferPhotoAmt", ads: "OfferAdsAmt", poster: "OfferPosterAmt", ins: "OfferInsuranceAmt", rent: "OfferVenueRentalAmt",
+                      cont: "OfferContingency", pay: "OfferPayAtCount" }
+                  : { travel: "HLTravel", hosp: "HLHospitality", sup: "SupportAmt", vj: "VJAmt", st: "SoundTechsAmt", sh: "StagehandsAmt", sec: "SecurityAmt",
+                      snd: "SoundAmt", gear: "GearAmt", photo: "PhotoAmt", ads: "AdsAmt", poster: "PosterAmt", ins: "InsuranceAmt", rent: "VenueRentalAmt",
+                      cont: "Contingency", pay: "HLPayAtCount" };
+      var C2 = res.costs;
+      var lines = [
+        [hl, "Headliner guarantee", "GuaranteeAmt", guaranteeAmt, ""],
+        [hl, "Headliner bonus at this count", A.pay + "-GuaranteeAmt", res.headliner.pay - guaranteeAmt, X.hlDescription(inp)],
+        [hl, "Travel / hotel", A.travel, C2.headlinerTravel, ""],
+        [hl, "Hospitality / rider", A.hosp, C2.headlinerHospitality, ""],
+        [null, "Supporting artists", A.sup, C2.support, inp.supportSlots + " x " + X.fmt$(off ? offerInp.supportPrice : inp.supportPrice)],
+        [null, "VJ", A.vj, C2.vj, ""],
+        [null, "Sound techs", A.st, C2.soundTechs, ""],
+        [null, "Stagehands", A.sh, C2.stagehands, ""],
+        [null, "Contracted security", A.sec, C2.security, ""],
+        [null, "Sound rental", A.snd, C2.sound, ""],
+        [null, "Additional deck / gear", A.gear, C2.gear, ""],
+        [null, "Photo / video", A.photo, C2.photo, ""],
+        [null, "Advertising", A.ads, C2.ads, ""],
+        [null, "Poster design", A.poster, C2.poster, ""],
+        [null, "Event insurance", A.ins, C2.insurance, ""],
+        [ven, "Flat rental / fee", A.rent, C2.venueRental, ""],
+        [ven, "Venue % of door", idx("ByT_DoorCut"), r.doorCut, "Comes out of ticket sales"],
+        [ven, "Per-head fee", idx("ByT_PerHead"), r.venue.perHead, "Everyone in the room, comps included"],
+        [pn, "Ticketing fees we absorb", idx("ByT_FeesAbsorbed"), r.eventbrite.absorbed, ""],
+        [null, "Door card processing", idx("ByT_DoorProc"), r.doorProc, ""],
+        [null, "Custom cost lines", "CustomAmt", L.custom, "Listed on Inputs"]
+      ];
+      if (off) lines.push([null, "Offer-only lines", "OfferLinesAmt", offerLinesSum, "Listed on Inputs"]);
+      lines.push([null, "Contingency", A.cont, res.contingency, "On the fixed costs, guarantee included"]);
+      var eFirst = 0, eLast = 0;
+      lines.forEach(function (e) {
+        var payee = e[0] === null ? cell("", "text", "input") : txt(e[0], "label");
+        var row = Bu.add([null, payee, txt(e[1], "label"), fx(e[2], e[3], "money", "label", { fmt: DASH }), cell(NO, "text", "input", { dv: choice([YES, NO]), align: "center" }),
+          txt(e[4], "muted")]);
+        if (!eFirst) eFirst = row;
+        eLast = row;
+      });
+      var amt = "D" + eFirst + ":D" + eLast, paid = "E" + eFirst + ":E" + eLast;
+      var total = res.totalCosts + r.venue.doorCut + r.venue.perHead + r.eventbrite.absorbed + r.doorProc;
+      var tRow = Bu.add([null, txt("Total expenses", "subtotal"), txt("", "subtotal"), fx("SUM(" + amt + ")", total, "money", "subtotal"),
+        fx('COUNTIF(' + paid + ',"' + YES + '")&" of ' + lines.length + ' paid"', "0 of " + lines.length + " paid", "text", "subtotal")]);
+      Bu.add([null, txt("Paid so far", "label"), null, fx('SUMIF(' + paid + ',"' + YES + '",' + amt + ")", 0, "money", "label")]);
+      Bu.add([null, txt("Still owed", "label"), null, fx("D" + tRow + "-D" + (tRow + 1), total, "money", "label")]);
+      Bu.add([]);
+      bbar("Summary");
+      var revRow = Bu.add([null, txt("Ticket revenue after tax", "label"), null, fx(idx("ByT_FaceNet"), r.faceNet, "money", "label")]);
+      Bu.add([null, txt("Other income (merch, sponsor)", "label"), null, fx("OtherIncome", inp.otherIncome, "money", "label")]);
+      Bu.add([null, txt("Total expenses", "label"), null, fx("-D" + tRow, -total, "money", "label")]);
+      var netRow2 = Bu.add([null, fx('"Net at "&ChosenN&" tickets"', "Net at " + n + " tickets", "text", "total"), null,
+        fx("D" + revRow + "+D" + (revRow + 1) + "+D" + (revRow + 2), res.net, "money", "total", { name: off ? "BudgetNet_Offer" : "BudgetNet_True" })]);
+      Bu.signCF("$D$" + netRow2);
+      return Bu;
+    }
+    sheets.budgetTrue = budget("true");
+    sheets.budgetOffer = budget("offer");
+
+    return [sheets.summary, sheets.inputs, sheets.offer, sheets.budgetTrue, sheets.budgetOffer, sheets.tickets, sheets.venue, sheets.talent, sheets.costs, sheets.byT, sheets.pm];
   }
 
   // The "Price math" tab: one column per price case. Each column has the per-ticket constants at its
@@ -1021,6 +1310,7 @@
           if (numeric) al.horizontal = "right";
           if (c.link) { font.color = { argb: argb(LIGHT.accent) }; font.underline = true; }
           if (c.bold) font.bold = true;
+          if (c.size) font.size = c.size;
           if (c.color) font.color = { argb: argb(c.color) };
           if (c.fill) fill = c.fill;
           if (c.align) al.horizontal = c.align;

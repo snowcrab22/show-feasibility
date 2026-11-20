@@ -7,7 +7,7 @@
   var G = window.ShowGoogle;
   var STORE_KEY = "kcplur-show-feasibility-v1"; // same key and {v, inputs, n} shape as the first version
   var SECTION_KEY = "kcplur-show-feasibility-section";
-  var SECTION_NAMES = ["overview", "tickets", "venue", "talent", "costs", "share"];
+  var SECTION_NAMES = ["overview", "tickets", "venue", "talent", "costs", "offer", "share"];
   var SVGNS = "http://www.w3.org/2000/svg";
   var MINUS = "−";
 
@@ -249,6 +249,93 @@
     ]));
   }
 
+  // ---------------------------------------------------------------- offer (padded costs)
+  function buildOffer() {
+    var host = $("offer-ledger");
+    var rows = X.OFFER_ROWS.map(function (o) {
+      var id = "offer-" + o.key;
+      var inp = el("input", { type: "number", id: id, min: "0", step: "1", inputmode: "decimal", dataset: { ok: o.key } });
+      var row = lrow("offer", [
+        el("label", { className: "lname", "for": id }, [o.label, el("span", { className: "lreal", id: id + "-real" })]),
+        unitWrap(inp, "money"),
+        lval(id + "-line")
+      ]);
+      row.id = id + "-row";
+      return row;
+    });
+    host.appendChild(lgroup("Padded costs", null, rows));
+    host.appendChild(lgroup("Offer-only lines", null, [
+      el("p", { className: "hint", text: "Costs only the offer shows, like a production manager or backline." }),
+      el("div", { className: "custom-list", id: "offer-extra-list" }),
+      el("div", {}, [el("button", { type: "button", className: "small", id: "btn-add-offer-line", text: "Add offer-only line" })])
+    ], "offer-extra-total", "Offer-only lines subtotal"));
+    host.appendChild(el("div", { className: "lgroup" }, [
+      lrow("", [el("span", { text: "Contingency on what the offer adds" }), lval("offer-cont")]),
+      lrow("total grand", [el("span", { text: "The offer adds to costs" }), lval("offer-delta")])
+    ]));
+  }
+  function renderOfferExtra() {
+    var list = $("offer-extra-list");
+    list.textContent = "";
+    state.inputs.offerExtra.forEach(function (r, i) {
+      var nameId = "offer-x-name-" + i, amtId = "offer-x-amount-" + i;
+      var name = el("input", { type: "text", id: nameId, placeholder: "e.g. Production manager", autocomplete: "off", dataset: { oi: i, of: "name" } });
+      name.value = r.name;
+      var amt = el("input", { type: "number", id: amtId, min: "0", step: "1", inputmode: "decimal", dataset: { oi: i, of: "amount" } });
+      amt.value = r.amount;
+      var rm = el("button", { type: "button", className: "small", id: "offer-x-remove-" + i, dataset: { oremove: i }, "aria-label": "Remove offer-only line " + (i + 1), text: "Remove" });
+      list.appendChild(el("div", { className: "custom-row" }, [
+        el("label", { className: "sr-only", "for": nameId, text: "Offer-only line " + (i + 1) + " name" }), name,
+        el("label", { className: "sr-only", "for": amtId, text: "Offer-only line " + (i + 1) + " amount" }), unitWrap(amt, "money"), rm
+      ]));
+    });
+  }
+  function syncOffer() {
+    X.OFFER_ROWS.forEach(function (o) {
+      var v = state.inputs.offerAmounts[o.key];
+      $("offer-" + o.key).value = v === undefined ? "" : v;
+    });
+    renderOfferExtra();
+  }
+  function renderOffer(b) {
+    var inp = b.inp, r = b.r, C = { cents: true };
+    var offer = M.offerInputs(inp);
+    var ro = M.compute(offer, r.n), so = M.compute(offer, b.S);
+    var beO = M.breakEven(offer);
+    X.OFFER_ROWS.forEach(function (o) {
+      var on = o.on(inp), mult = o.mult(inp), id = "offer-" + o.key;
+      $(id + "-row").hidden = !on;
+      $(id).placeholder = String(inp[o.key]);
+      $(id + "-real").textContent = "Yours: " + fmt$(inp[o.key], C) + (mult !== 1 ? " x " + mult : "");
+      $(id + "-line").textContent = fmt$(offer[o.key] * mult, C);
+    });
+    var extra = inp.offerExtra.reduce(function (s, x) { return s + x.amount; }, 0);
+    $("offer-extra-total").textContent = fmt$(extra, C);
+    var added = ro.fixedCostsTotal - r.fixedCostsTotal;
+    $("offer-cont").textContent = fmt$(ro.contingency - r.contingency, C);
+    $("offer-delta").textContent = (added >= 0.005 ? "+" : "") + fmt$(added, C);
+    $("offer-delta").previousSibling.textContent = added < -0.005 ? "The offer takes off costs" : "The offer adds to costs";
+    $("offer-sub").textContent = "At " + r.n + " tickets and sold out";
+    function beText(v) { return v === null ? "Not possible" : v + " tickets"; }
+    var rows = [
+      ["Total costs at " + r.n + " tickets", fmt$(r.totalCosts), fmt$(ro.totalCosts)],
+      ["Net at " + r.n + " tickets", fmt$(r.net, { plus: true }), fmt$(ro.net, { plus: true })],
+      ["Break-even", beText(b.be), beText(beO)],
+      ["Headliner pay, sold out", fmt$(b.soldOut.headliner.pay), fmt$(so.headliner.pay)],
+      ["Our net, sold out", fmt$(b.soldOut.net, { plus: true }), fmt$(so.net, { plus: true })]
+    ];
+    var tb = $("offer-table").tBodies[0];
+    tb.textContent = "";
+    rows.forEach(function (x) {
+      tb.appendChild(el("tr", {}, [el("th", { scope: "row", text: x[0] }), el("td", { className: "num", text: x[1] }), el("td", { className: "num", text: x[2] })]));
+    });
+    var same = Math.abs(added) < 0.005;
+    $("sum-offer").textContent = same ? "The offer uses your real costs. Pad any cost below to build the version you send." :
+      "The offer " + (added > 0 ? "adds " + fmt$(added) + " to" : "takes " + fmt$(-added) + " off") + " costs: net " + fmt$(ro.net, { plus: true }) + " at " + r.n + " tickets (yours " + fmt$(r.net, { plus: true }) + ").";
+    setNav("offer", same ? "same" : (added > 0 ? "+" : MINUS) + fmt$(Math.abs(added)));
+  }
+  function offerLink() { return X.encodeLink(M.offerInputs(state.inputs), state.n, M); }
+
   function buildInputs() {
     SECTIONS.forEach(function (s) {
       var body = el("div", { className: "group-body" });
@@ -257,6 +344,7 @@
       $(s.host).appendChild(el("div", { className: "card group-card", id: s.id }, [el("h3", { text: s.title }), body]));
     });
     buildLedger();
+    buildOffer();
     controls.price = $("f-price");
     controls.venueName = $("f-venueName");
     controls.showName = $("f-showName");
@@ -271,6 +359,7 @@
       else c.value = v;
     });
     renderCustomRows();
+    syncOffer();
   }
 
   function applyVisibility() {
@@ -287,6 +376,19 @@
 
   function onControl(e) {
     var t = e.target;
+    if (t.dataset.ok) {
+      if (t.value === "") delete state.inputs.offerAmounts[t.dataset.ok];
+      else state.inputs.offerAmounts[t.dataset.ok] = Math.max(0, parseNum(t.value));
+      recompute();
+      return;
+    }
+    if (t.dataset.oi !== undefined) {
+      var oi = +t.dataset.oi;
+      if (!state.inputs.offerExtra[oi]) return;
+      state.inputs.offerExtra[oi][t.dataset.of] = t.dataset.of === "name" ? t.value : Math.max(0, parseNum(t.value));
+      recompute();
+      return;
+    }
     if (t.dataset.ci !== undefined) {
       var i = +t.dataset.ci;
       if (!state.inputs.custom[i]) return;
@@ -382,7 +484,8 @@
         recompute(e.target);
         return;
       }
-      if (e.target.dataset && (e.target.dataset.k || e.target.dataset.ci !== undefined)) onControl(e);
+      var d = e.target.dataset;
+      if (d && (d.k || d.ci !== undefined || d.ok || d.oi !== undefined)) onControl(e);
     });
     document.addEventListener("change", function (e) {
       if (e.target.tagName === "SELECT" || e.target.type === "checkbox") return; // handled on input
@@ -411,6 +514,23 @@
         recompute();
       }
     });
+    $("offer-ledger").addEventListener("click", function (e) {
+      var t = e.target;
+      if (t.id === "btn-add-offer-line") {
+        state.inputs.offerExtra.push({ name: "", amount: 0 });
+        renderOfferExtra();
+        $("offer-x-name-" + (state.inputs.offerExtra.length - 1)).focus();
+        recompute();
+      } else if (t.dataset && t.dataset.oremove !== undefined) {
+        var idx = +t.dataset.oremove;
+        state.inputs.offerExtra.splice(idx, 1);
+        renderOfferExtra();
+        var next = $("offer-x-name-" + Math.min(idx, state.inputs.offerExtra.length - 1)) || $("btn-add-offer-line");
+        next.focus();
+        recompute();
+      }
+    });
+    $("btn-copy-offer-link").addEventListener("click", function () { copyText(offerLink(), "Offer link copied. It opens the padded numbers as their own scenario."); });
     $("btn-copy-summary").addEventListener("click", function () { copyText(summaryText(), "Summary copied. Paste it in Discord or a text."); });
     $("btn-copy-link").addEventListener("click", copyLink);
     $("btn-copy-link-top").addEventListener("click", copyLink);
@@ -899,6 +1019,7 @@
     renderPerTicket(r, inp);
     renderTicketMoney(r, inp);
     renderCosts(r, inp);
+    renderOffer(last);
     renderSummaries(last);
     save();
   }

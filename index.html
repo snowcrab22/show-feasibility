@@ -414,7 +414,12 @@ td.neg .mdetail { color: var(--crit-text); }
 .lrow.crew.is-off .crew-inputs { opacity: 0.5; }
 .lsummary { display: grid; gap: 4px; }
 .custom-list .custom-row { grid-template-columns: minmax(0, 1fr) 128px auto; }
+.lrow.offer { grid-template-columns: minmax(0, 1fr) 112px 104px; }
+.lrow.offer[hidden] { display: none; }
+.lrow.offer .lreal { display: block; color: var(--ink-2); font-size: 13px; }
+#offer-table th.num, #offer-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 480px) {
+  .lrow.offer { grid-template-columns: minmax(0, 1fr) 96px 84px; }
   .lrow { grid-template-columns: minmax(0, 1fr) 108px; }
   .lrow.contingency { grid-template-columns: minmax(0, 1fr) 72px 96px; }
   .lrow.crew { grid-template-columns: minmax(0, 1fr) 96px; row-gap: 4px; }
@@ -477,6 +482,7 @@ td.neg .mdetail { color: var(--crit-text); }
     <li><a href="#venue" data-sec="venue">Venue<span class="nav-num" id="nav-num-venue"></span></a></li>
     <li><a href="#talent" data-sec="talent">Talent<span class="nav-num" id="nav-num-talent"></span></a></li>
     <li><a href="#costs" data-sec="costs">Costs<span class="nav-num" id="nav-num-costs"></span></a></li>
+    <li><a href="#offer" data-sec="offer">Offer<span class="nav-num" id="nav-num-offer"></span></a></li>
     <li><a href="#share" data-sec="share">Share<span class="nav-num" id="nav-num-share"></span></a></li>
   </ul>
 </nav>
@@ -641,6 +647,27 @@ td.neg .mdetail { color: var(--crit-text); }
     </div>
   </section>
 
+  <!-- Offer -->
+  <section class="sec" id="sec-offer" data-sec="offer" aria-labelledby="h-offer" hidden>
+    <div class="sec-head"><h2 id="h-offer">Offer</h2><p class="sec-sum" id="sum-offer"></p></div>
+    <div class="sec-grid costs-grid">
+      <div class="card ledger-card">
+        <div class="card-head"><h3>Offer costs</h3><span class="card-sub">What the artist's agent sees</span></div>
+        <p class="hint">Pad the costs you'll put in the offer. Leave a box blank to use your real number. A cost that's off stays off; add anything new as an offer-only line.</p>
+        <div class="ledger" id="offer-ledger"></div>
+      </div>
+      <div class="sec-results">
+        <div class="card">
+          <div class="card-head"><h3>Offer vs your numbers</h3><span class="card-sub" id="offer-sub"></span></div>
+          <table id="offer-table"><caption class="sr-only">Offer compared with your real numbers</caption>
+            <thead><tr><th scope="col"></th><th scope="col" class="num">Yours</th><th scope="col" class="num">Offer</th></tr></thead><tbody></tbody></table>
+          <div class="share-row"><button type="button" id="btn-copy-offer-link">Copy offer link</button></div>
+          <p class="hint">The offer link opens the padded numbers as a scenario of their own. The Excel export includes an Offer tab laid out like the KC PLUR offer sheet, plus a true budget and a padded budget.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- Share -->
   <section class="sec" id="sec-share" data-sec="share" aria-labelledby="h-share" hidden>
     <div class="sec-head"><h2 id="h-share">Share</h2><p class="sec-sum" id="sum-share"></p></div>
@@ -703,10 +730,10 @@ td.neg .mdetail { color: var(--crit-text); }
 </main>
 <div class="tip" id="tip" role="presentation"></div>
 
-<script src="model.js?v=6"></script>
-<script src="export.js?v=7"></script>
-<script src="workbook.js?v=4"></script>
+<script src="model.js?v=7"></script>
+<script src="export.js?v=8"></script>
+<script src="workbook.js?v=5"></script>
 <script src="google.js?v=3"></script>
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>
