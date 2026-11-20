@@ -145,7 +145,12 @@
   ];
 
   // Cost ledger groups (Costs section).
+  // Crew rows (people x pay each): k = people key, pay = pay key, line = fixedCosts line.
   var LEDGER = [
+    { id: "labor", title: "Labor", rows: [
+      { k: "soundTechs", pay: "soundTechPay", line: "soundTechs", toggle: "soundTechsOn", label: "Sound techs" },
+      { k: "stagehands", pay: "stagehandPay", line: "stagehands", toggle: "stagehandsOn", label: "Stagehands" }
+    ] },
     { id: "production", title: "Production", rows: [
       { k: "security", toggle: "securityOn", label: "Contracted security (flat)" },
       { k: "sound", toggle: "soundOn", label: "Sound rental" },
@@ -154,15 +159,14 @@
     ] },
     { id: "marketing", title: "Marketing", rows: [
       { k: "ads", label: "Advertising budget" },
-      { k: "poster", label: "Poster design" },
-      { k: "printing", label: "Printing" }
+      { k: "poster", label: "Poster design" }
     ] },
-    { id: "licensing", title: "Licensing & insurance", rows: [
-      { k: "ascap", toggle: "ascapOn", label: "PRO licensing: ASCAP" },
-      { k: "bmi", toggle: "bmiOn", label: "PRO licensing: BMI", note: "Usually the venue's license; turn on if the venue requires promoter coverage." },
-      { k: "insurance", toggle: "insuranceOn", label: "Event insurance", note: "Typical one-night event policy quote." }
+    { id: "insurance", title: "Insurance", rows: [
+      { k: "insurance", toggle: "insuranceOn", label: "Event insurance" }
     ] }
   ];
+  function ledgerLineValue(f, L) { return L[f.line || f.k]; }
+  function crewLabel(f, inp) { return f.label + " (" + inp[f.k] + " x " + fmt$(inp[f.pay]) + ")"; }
   var CONTINGENCY_HINT = "% of all other costs, not counting headliner %, per-ticket, versus or backend pay, the venue's % of door or the per-head fee.";
 
   // ---------------------------------------------------------------- shared wording
@@ -248,7 +252,7 @@
     { k: "venue", name: "Venue", detail: "% of door, rental, per-head", color: "var(--s3)", hex: LIGHT.s3 },
     { k: "headliner", name: "Headliner", detail: "pay, travel, rider", color: "var(--s4)", text: "#0b0b0b", hex: LIGHT.s4 },
     { k: "supportVj", name: "Support + VJ", detail: "", color: "var(--s5)", hex: LIGHT.s5 },
-    { k: "production", name: "Production", detail: "sound, security, gear", color: "var(--s6)", hex: LIGHT.s6 },
+    { k: "production", name: "Production & labor", detail: "sound, security, gear, crew", color: "var(--s6)", hex: LIGHT.s6 },
     { k: "marketing", name: "Marketing", detail: "", color: "var(--s7)", hex: LIGHT.s7 },
     { k: "other", name: "Other costs and contingency", detail: "", color: "var(--s8)", hex: LIGHT.s8 },
     { k: "profit", name: "Profit", detail: "ours", color: "var(--seg-profit)", text: "var(--seg-profit-text)", hex: LIGHT.segProfit }
@@ -405,9 +409,10 @@
     var rows = [
       R("Talent", talentTotal(r)),
       R("Venue rental", L.venueRental),
+      R("Labor", L.soundTechs + L.stagehands),
       R("Production", L.security + L.sound + L.gear + L.photo),
-      R("Marketing", L.ads + L.poster + L.printing),
-      R("Licensing & insurance", L.ascap + L.bmi + L.insurance),
+      R("Marketing", L.ads + L.poster),
+      R("Insurance", L.insurance),
       R("Custom", L.custom),
       R("Contingency", r.contingency)
     ];
@@ -439,46 +444,15 @@
       var sub = 0;
       groups.push({ title: g.title, rows: g.rows.map(function (f) {
         var on = f.toggle ? !!inp[f.toggle] : true;
-        if (on) sub += L[f.k];
-        return line(f.label, L[f.k], on ? undefined : false, true);
+        var v = ledgerLineValue(f, L);
+        if (on) sub += v;
+        return line(f.pay ? crewLabel(f, inp) : f.label, v, on ? undefined : false, !f.pay);
       }), subtotal: { label: g.title + " subtotal", v: sub } });
     });
     groups.push({ title: "Custom cost lines", rows: inp.custom.map(function (c, i) {
       return line(String(c.name || "").trim() || "Cost line " + (i + 1), c.amount, undefined, true);
     }), subtotal: { label: "Custom cost lines subtotal", v: L.custom } });
     return groups;
-  }
-
-  // Notes: { strong, rest, sec, link }
-  function confirmNotes(inp) {
-    var pn = platLabel(inp), out = [];
-    function c(strong, rest, sec, link) { out.push({ strong: strong, rest: rest, sec: sec, link: link }); }
-    c("Venue deal.", "The venue takes " + venueDescription(inp) + ". Confirm each part with the venue" +
-      (inp.doorCutOn ? ", including what the " + inp.doorCutPct + "% is taken from; switching to gross face moves the numbers." : "."), "venue", "Open Venue");
-    c("Sales tax rate.", (inp.taxOn ? inp.taxRate + "% " + (inp.taxMode === "included" ? "included in the price" : "added on top") : "Sales tax is off") + ". Look up the combined rate for the venue's address.", "tickets", "Open Tickets & fees");
-    c(pn + " rates.", inp.ebServicePct + "% + " + fmt$(inp.ebServiceFixed, { cents: true }) + " service and " + inp.ebProcPct + "% processing, " + (inp.ebMode === "pass" ? "passed to the buyer" : "absorbed by us") + ". Check the platform's pricing page.", "tickets", "Open Tickets & fees");
-    c("PRO licensing.", "ASCAP and BMI are " + (inp.ascapOn || inp.bmiOn ? "partly on" : "off") + ": usually the venue's license. Turn them on if the venue requires promoter coverage.", "costs", "Open Costs");
-    c("Insurance.", "Event insurance is " + (inp.insuranceOn ? "on" : "off") + " (a recent one-night quote was $357). Check whether the venue requires it.", "costs", "Open Costs");
-    c("Sound.", "Sound rental is " + (inp.soundOn ? "on" : "off") + ". Confirm the house system covers the lineup.", "costs", "Open Costs");
-    return out;
-  }
-  function assumptionNotes(inp, S) {
-    var pn = platLabel(inp), out = [];
-    function a(strong, rest) { out.push({ strong: strong, rest: rest }); }
-    a("Tickets.", "Capacity " + inp.capacity + " minus " + inp.comps + " comps leaves " + S + " sellable. Comps count toward attendance, not revenue. Online and door splits use whole tickets.");
-    a("Our money.", "Net ticket revenue is ticket sales after sales tax, minus " + pn + " fees we absorb, door card processing, the venue's % of door and any per-head fee. Sales tax and fees passed to buyers are never ours.");
-    a("Venue deal.", "The parts add up. The % of door and the per-head fee come out of ticket revenue; the per-head fee counts everyone in the room, comps included, so it is owed even at 0 tickets. The flat rental is a cost line and counts toward contingency.");
-    a("Passed fees.", "When fees go to the buyer, the platform's processing applies to the whole checkout, so the buyer total is (face + on-top tax + service fee) / (1 - processing %).");
-    a("Door price.", inp.doorPriceOn
-      ? "Door tickets sell at " + priceText(inp.doorPrice) + " and online tickets at " + priceText(inp.price) + ". The heatmap and break-even price move both prices together, keeping the door markup."
-      : "Door tickets sell at the same price as online tickets.");
-    a("Door card fee.", "The % applies to what the door buyer is charged, including any on-top tax. Cash has no fee.");
-    a("Headliner break-even.", "The first ticket count where net reaches $0 counting the guarantee and all other costs but no headliner bonus, % or backend. After-break-even parts pay only on tickets past it, and pay nothing if the show never gets there.");
-    a("Headliner % basis.", "Gross face is tickets x listed price (door price for door tickets). Face net removes included sales tax. A % that starts later pays on the difference between the basis at the current count and at the start point.");
-    a("Versus.", "Pays the greater of the guarantee and the % plus per-ticket parts; with the guarantee off the floor is $0. Backend is added after.");
-    a("Contingency.", inp.contingencyPct + "% of every other cost including the guarantee and the venue rental, but not the headliner %, per-ticket, versus overage or backend, and not the venue's % of door or per-head fee.");
-    a("Break-even price.", "The lowest price, to the cent, where the chosen ticket count reaches $0 net, searched up to $1,000.");
-    return out;
   }
 
   // Same {v: 1, inputs, n} shape and base64-of-UTF-8 encoding as the page's scenario code.
@@ -658,10 +632,6 @@
       });
       rows.push(blank());
 
-      rows.push(heading("Things to confirm before booking", W));
-      confirmNotes(inp).forEach(function (nt) {
-        rows.push([null, txt(nt.strong + " " + nt.rest, "label", { span: W - 1, wrap: true })]);
-      });
       sheets.push({ name: "Overview", columns: [3, 34, 14, 18, 16, 13, 13, 13], rows: rows, freeze: 0 });
     })();
 
@@ -784,6 +754,12 @@
       LEDGER.forEach(function (g) {
         rows.push([txt(g.title, "subhead", { span: 3 })]);
         g.rows.forEach(function (f) {
+          if (f.pay) {
+            rows.push([txt(f.label + ": people", "label", { color: inp[f.toggle] ? undefined : LIGHT.muted }), cell(inp[f.k], "int", "input"),
+              txt(inp[f.toggle] ? "on" : "off", "input", { color: inp[f.toggle] ? undefined : LIGHT.muted, align: "center" })]);
+            rows.push([txt(f.label + ": pay each", "label", { color: inp[f.toggle] ? undefined : LIGHT.muted }), cell(inp[f.pay], "money", "input")]);
+            return;
+          }
           var row = [txt(f.label, "label", { color: f.toggle && !inp[f.toggle] ? LIGHT.muted : undefined }), cell(inp[f.k], "money", "input")];
           if (f.toggle) row.push(txt(inp[f.toggle] ? "on" : "off", "input", { color: inp[f.toggle] ? undefined : LIGHT.muted, align: "center" }));
           rows.push(row);
@@ -798,9 +774,6 @@
       rows.push([txt("Contingency", "label"), cell(inp.contingencyPct / 100, "pct", "input", { fmt: FMT.pctIn })]);
       rows.push([txt("Other income (merch, sponsor)", "label"), cell(inp.otherIncome, "money", "input")]);
       rows.push([txt("Default tickets sold (% of sellable, used when a code has no count)", "label"), cell(inp.expectedPct / 100, "pct", "input", { fmt: FMT.pctIn })]);
-      rows.push(blank());
-      rows.push(heading("How the numbers work", 3));
-      assumptionNotes(inp, S).forEach(function (a) { rows.push([txt(a.strong + " " + a.rest, "label", { span: 3, wrap: true })]); });
       rows.push(blank());
       rows.push(heading("Scenario code", 3));
       rows.push([txt("Paste this into Share > Load a scenario code at " + PAGE_URL + " to reopen this scenario.", "muted", { span: 3, wrap: true })]);
@@ -924,7 +897,7 @@
     // rows
     bundle: bundle, headlineRows: headlineRows, moneyRows: moneyRows, scenarioRows: scenarioRows, heatGrid: heatGrid, mixOklab: mixOklab, heatColor: heatColor,
     perTicketRows: perTicketRows, ticketMoneyRows: ticketMoneyRows, headlinerRows: headlinerRows, talentRows: talentRows, venueRows: venueRows,
-    costCategoryRows: costCategoryRows, ledgerGroups: ledgerGroups, confirmNotes: confirmNotes, assumptionNotes: assumptionNotes,
+    costCategoryRows: costCategoryRows, ledgerGroups: ledgerGroups, ledgerLineValue: ledgerLineValue, crewLabel: crewLabel,
     encodeScenario: encodeScenario, localDate: localDate, fileName: fileName,
     // export
     buildSheets: buildSheets, writeWorkbook: writeWorkbook

@@ -172,6 +172,7 @@
     return g;
   }
   function ledgerInputRow(f) {
+    if (f.pay) return crewRow(f);
     var amt = makeInput({ k: f.k, type: "money" });
     var row;
     if (f.toggle) {
@@ -189,6 +190,23 @@
       amt.setAttribute("aria-describedby", n.id);
       return el("div", { style: "display:grid;gap:4px" }, [row, n]);
     }
+    return row;
+  }
+  // Labor line: on/off, people, pay each, and the line total.
+  function crewRow(f) {
+    var tg = makeInput({ k: f.toggle, type: "check" });
+    var ppl = makeInput({ k: f.k, type: "int" });
+    var pay = makeInput({ k: f.pay, type: "money" });
+    var row = lrow("crew", [
+      el("label", { className: "check lname", "for": tg.id }, [tg, f.label]),
+      el("div", { className: "crew-inputs" }, [
+        el("label", { className: "sr-only", "for": ppl.id, text: f.label + ": people" }), unitWrap(ppl, "int"),
+        el("span", { className: "crew-x", text: "x", "aria-hidden": "true" }),
+        el("label", { className: "sr-only", "for": pay.id, text: f.label + ": pay each for the night" }), unitWrap(pay, "money")
+      ]),
+      lval("led-" + f.line)
+    ]);
+    fieldRows.push({ row: row, dependsOn: f.toggle });
     return row;
   }
   function buildLedger() {
@@ -656,7 +674,6 @@
     renderPerTicket(r, inp);
     renderTicketMoney(r, inp);
     renderCosts(r, inp);
-    renderNotes(inp, last);
     renderSummaries(last);
     save();
   }
@@ -1032,9 +1049,12 @@
     var taken = r.venue.doorCut + r.venue.perHead;
     set("led-venue-taken", taken, inp.doorCutOn || inp.venuePerHeadOn);
     set("led-venue", L.venueRental);
+    set("led-soundTechs", L.soundTechs, inp.soundTechsOn);
+    set("led-stagehands", L.stagehands, inp.stagehandsOn);
+    set("led-labor", L.soundTechs + L.stagehands);
     set("led-production", L.security + L.sound + L.gear + L.photo);
-    set("led-marketing", L.ads + L.poster + L.printing);
-    set("led-licensing", L.ascap + L.bmi + L.insurance);
+    set("led-marketing", L.ads + L.poster);
+    set("led-insurance", L.insurance);
     set("led-custom", L.custom);
     set("led-contingency", r.contingency);
     $("led-contingency").title = inp.contingencyPct + "% of " + fmt$(r.contingencyBase, C);
@@ -1048,17 +1068,6 @@
     $("net-sub").textContent = "At " + r.n + " tickets";
     $("cat-sub").textContent = "At " + r.n + " tickets";
     fillRows($("cat-table").tBodies[0], X.costCategoryRows(r));
-  }
-
-  function renderNotes(inp, b) {
-    var cl = $("confirm-list"), al = $("assume-list");
-    cl.textContent = ""; al.textContent = "";
-    X.confirmNotes(inp).forEach(function (n) {
-      cl.appendChild(el("li", {}, [el("strong", { text: n.strong }), " " + n.rest + " ", el("a", { href: "#" + n.sec, text: n.link })]));
-    });
-    X.assumptionNotes(inp, b.S).forEach(function (n) {
-      al.appendChild(el("li", {}, [el("strong", { text: n.strong }), " " + n.rest]));
-    });
   }
 
   // ---------------------------------------------------------------- start

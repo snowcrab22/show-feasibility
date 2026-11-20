@@ -6,7 +6,7 @@
  * Every break-even scan treats net >= -EPS as break-even so floating-point
  * noise on round-number scenarios never pushes the answer one ticket late.
  *
- * Pinned readings (also listed in the page's Assumptions section):
+ * Pinned readings:
  *  - Tax off: rate r = 0 in both tax modes.
  *  - Channel split uses whole tickets: online = round(n x online%), door = n - online;
  *    door cash = round(door x cash%), door card = door - door cash.
@@ -98,6 +98,13 @@
     supportPrice: 75,
     vjOn: false,
     vj: 300,
+    // Labor (people x pay each for the night)
+    soundTechsOn: false,
+    soundTechs: 1,
+    soundTechPay: 150,
+    stagehandsOn: false,
+    stagehands: 2,
+    stagehandPay: 100,
     // Production
     securityOn: true,
     security: 100,
@@ -109,12 +116,7 @@
     // Marketing
     ads: 80,
     poster: 75,
-    printing: 0,
-    // Other
-    ascapOn: false,
-    ascap: 429,
-    bmiOn: false,
-    bmi: 449,
+    // Insurance and other
     insuranceOn: false,
     insurance: 357,
     contingencyPct: 5,
@@ -194,6 +196,8 @@
     out.capacity = Math.max(1, Math.round(out.capacity));
     out.comps = Math.min(out.capacity, Math.round(out.comps));
     out.supportSlots = Math.round(out.supportSlots);
+    out.soundTechs = Math.round(out.soundTechs);
+    out.stagehands = Math.round(out.stagehands);
     out.hlPctStartN = Math.round(out.hlPctStartN);
     out.hlPerTicketStartN = Math.round(out.hlPerTicketStartN);
     ["onlinePct", "doorCashPct", "expectedPct"].forEach(function (k) { out[k] = Math.min(100, out[k]); });
@@ -328,6 +332,8 @@
       headlinerHospitality: inp.hlHospitality,
       support: inp.supportSlots * inp.supportPrice,
       vj: inp.vjOn ? inp.vj : 0,
+      soundTechs: inp.soundTechsOn ? inp.soundTechs * inp.soundTechPay : 0,
+      stagehands: inp.stagehandsOn ? inp.stagehands * inp.stagehandPay : 0,
       security: inp.securityOn ? inp.security : 0,
       sound: inp.soundOn ? inp.sound : 0,
       gear: inp.gearOn ? inp.gear : 0,
@@ -335,9 +341,6 @@
       venueRental: inp.venueRentalOn ? inp.venueRental : 0,
       ads: inp.ads,
       poster: inp.poster,
-      printing: inp.printing,
-      ascap: inp.ascapOn ? inp.ascap : 0,
-      bmi: inp.bmiOn ? inp.bmi : 0,
       insurance: inp.insuranceOn ? inp.insurance : 0,
       custom: inp.custom.reduce(function (s, r) { return s + (r.amount || 0); }, 0)
     };
@@ -422,9 +425,9 @@
       venue: ts.doorCut + ts.perHead + L.venueRental,
       headliner: headlinerTotal,
       supportVj: L.support + L.vj,
-      production: L.sound + L.security + L.gear,
-      marketing: L.ads + L.poster + L.printing,
-      other: L.ascap + L.bmi + L.insurance + L.photo + L.custom + fc.contingency,
+      production: L.sound + L.security + L.gear + L.soundTechs + L.stagehands,
+      marketing: L.ads + L.poster,
+      other: L.insurance + L.photo + L.custom + fc.contingency,
       profit: Math.max(0, net),
       loss: Math.max(0, -net)
     };
