@@ -3,6 +3,7 @@
   "use strict";
   var M = window.ShowModel;
   var X = window.ShowExport;
+  var WB = window.ShowWorkbook;
   var STORE_KEY = "kcplur-show-feasibility-v1"; // same key and {v, inputs, n} shape as the first version
   var SECTION_KEY = "kcplur-show-feasibility-section";
   var SECTION_NAMES = ["overview", "tickets", "venue", "talent", "costs", "share"];
@@ -684,7 +685,7 @@
     function release() { exporting = false; btn.disabled = false; btn.removeAttribute("aria-busy"); }
     loadExcel().then(function (ExcelJS) {
       stage = "build";
-      return X.writeWorkbook(ExcelJS, X.buildSheets(inputs, n, M, { date: date })).xlsx.writeBuffer();
+      return WB.writeWorkbook(ExcelJS, WB.buildSheets(inputs, n, M, { date: date })).xlsx.writeBuffer();
     }).then(function (buf) {
       stage = "save";
       var blob = new Blob([buf], { type: XLSX_MIME });

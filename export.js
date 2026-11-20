@@ -4,8 +4,8 @@
  * Three layers:
  *   1. Row builders (perTicketRows, ticketMoneyRows, ...) used by both the page (app.js) and the export,
  *      so the wording lives in one place.
- *   2. buildSheets(inputs, n, Model, opts) -> plain description of every sheet (pure, computed from the model).
- *   3. writeWorkbook(ExcelJS, sheets) -> ExcelJS workbook (thin).
+ *   2. Share links and scenario codes (encodeLink, decodeShared).
+ * The live workbook itself is built in workbook.js.
  */
 (function (root, factory) {
   var api = factory();
@@ -15,7 +15,6 @@
   "use strict";
 
   var PAGE_URL = "https://snowcrab22.github.io/show-feasibility/";
-  var SNAPSHOT_NOTE = "Numbers are a snapshot. Change inputs in the calculator and export again.";
   var MINUS = "−";
 
   // Frozen copy of the defaults when share links were introduced (v2). Never edit: links store only
@@ -239,8 +238,6 @@
       { k: "insurance", toggle: "insuranceOn", label: "Event insurance" }
     ] }
   ];
-  function ledgerLineValue(f, L) { return L[f.line || f.k]; }
-  function crewLabel(f, inp) { return f.label + " (" + inp[f.k] + " x " + fmt$(inp[f.pay]) + ")"; }
   var CONTINGENCY_HINT = "% of all other costs, not counting headliner %, per-ticket, versus or backend pay, the venue's % of door or the per-head fee.";
 
   // ---------------------------------------------------------------- shared wording
@@ -494,41 +491,6 @@
     return rows;
   }
 
-  // Full ledger for the sheet: { group, rows: [{label, v, t, cls, role, input}] }.
-  // role: 'line' (adds to total costs), 'info' (shown, not counted), 'subtotal'.
-  function ledgerGroups(r, inp) {
-    var L = r.costs, h = r.headliner, groups = [];
-    function line(label, v, on, input) {
-      return on === false ? { label: label, v: "off", t: "text", off: true, role: "line", amount: 0 } : { label: label, v: v, t: "money", role: "line", input: !!input, amount: v };
-    }
-    groups.push({ title: "Talent", rows: [
-      line("Headliner pay", h.pay),
-      line("Headliner travel / hotel and hospitality", L.headlinerTravel + L.headlinerHospitality),
-      line("Supporting artists (" + inp.supportSlots + " x " + fmt$(inp.supportPrice) + ")", L.support),
-      line("VJ", L.vj, inp.vjOn)
-    ], subtotal: { label: "Talent subtotal", v: talentTotal(r) } });
-    var taken = r.venue.doorCut + r.venue.perHead;
-    groups.push({ title: "Venue", rows: [
-      line("Flat rental / fee", L.venueRental, inp.venueRentalOn),
-      (inp.doorCutOn || inp.venuePerHeadOn)
-        ? { label: "% of door and per-head fee (already out of ticket revenue, not counted again)", v: taken, t: "money", role: "info" }
-        : { label: "% of door and per-head fee (already out of ticket revenue, not counted again)", v: "off", t: "text", off: true, role: "info" }
-    ], subtotal: { label: "Venue rental subtotal", v: L.venueRental } });
-    LEDGER.forEach(function (g) {
-      var sub = 0;
-      groups.push({ title: g.title, rows: g.rows.map(function (f) {
-        var on = f.toggle ? !!inp[f.toggle] : true;
-        var v = ledgerLineValue(f, L);
-        if (on) sub += v;
-        return line(f.pay ? crewLabel(f, inp) : f.label, v, on ? undefined : false, !f.pay);
-      }), subtotal: { label: g.title + " subtotal", v: sub } });
-    });
-    groups.push({ title: "Custom cost lines", rows: inp.custom.map(function (c, i) {
-      return line(String(c.name || "").trim() || "Cost line " + (i + 1), c.amount, undefined, true);
-    }), subtotal: { label: "Custom cost lines subtotal", v: L.custom } });
-    return groups;
-  }
-
   // Same {v: 1, inputs, n} shape and base64-of-UTF-8 encoding as the page's scenario code.
   function b64Utf8(str) {
     if (typeof Buffer !== "undefined" && typeof window === "undefined") return Buffer.from(str, "utf8").toString("base64");
@@ -584,7 +546,7 @@
     }
   }
 
-  // ---------------------------------------------------------------- sheet description
+  // ---------------------------------------------------------------- number formats (spreadsheet)
   var FMT = {
     money: "$#,##0.00;-$#,##0.00",
     money0: "$#,##0;-$#,##0",
@@ -594,407 +556,11 @@
     pct: "0.0%",
     pctIn: "0.0##%"
   };
-  function cell(v, t, style, extra) {
-    var c = { v: v, t: t || (typeof v === "number" ? "money" : "text") };
-    if (style) c.style = style;
-    if (extra) Object.keys(extra).forEach(function (k) { if (extra[k] !== undefined) c[k] = extra[k]; });
-    return c;
-  }
-  function txt(v, style, extra) { return cell(v, "text", style, extra); }
-
   function localDate(d) {
     d = d || new Date();
     function p(x) { return (x < 10 ? "0" : "") + x; }
     return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
   }
-  function showVenueLine(inp) {
-    var show = String(inp.showName || "").trim(), venue = String(inp.venueName || "").trim() || "New venue";
-    return (show ? show + " at " : "") + venue;
-  }
-
-  function topBlock(title, ctx, ncols) {
-    var inp = ctx.inp;
-    return [
-      [txt(title, "title")],
-      [txt(showVenueLine(inp), "label", { bold: true })],
-      [txt("Snapshot at " + ctx.r.n + " tickets, " + priceText(inp.price) + " ticket" + (inp.doorPriceOn ? " (" + priceText(inp.doorPrice) + " at the door)" : "") + ". Exported " + ctx.date + ".", "muted")],
-      [cell(PAGE_URL, "link", "muted")],
-      [txt(SNAPSHOT_NOTE + " Shaded cells are inputs.", "muted")],
-      []
-    ];
-  }
-  var TOP_ROWS = 5;
-  function heading(text, ncols) { return [txt(text, "heading", { span: ncols })]; }
-  function blank() { return []; }
-
-  function clsStyle(cls) { return cls === "total" ? "total" : cls === "sub" ? "muted" : "label"; }
-
-  // Two-column table (label | value) from shared rows, starting at column `col` (0-based).
-  function pairRows(rows, col, opts) {
-    opts = opts || {};
-    return rows.map(function (rw) {
-      var st = rw.cls === "total" ? "total" : rw.cls === "sub" ? "label" : "label";
-      var lab = txt(rw.label, st, { indent: rw.cls === "sub" ? 1 : undefined, color: rw.cls === "sub" ? LIGHT.ink2 : undefined, wrap: rw.wrap && opts.wrapLabels ? true : undefined });
-      var val;
-      if (rw.off) val = txt("off", st, { color: LIGHT.muted, align: "right" });
-      else if (rw.t === "text") val = txt(String(rw.v), st, { align: "right", color: rw.cls === "sub" ? LIGHT.ink2 : undefined, wrap: rw.wrap ? true : undefined });
-      else val = cell(rw.v, rw.t, st, { color: rw.cls === "sub" ? LIGHT.ink2 : undefined });
-      var row = [];
-      for (var i = 0; i < col; i++) row.push(null);
-      row.push(lab, val);
-      return row;
-    });
-  }
-
-  // Input rows for one section host (label | value | on/off).
-  function fieldValue(f, inp) {
-    if (f.type === "select") {
-      var o = f.options.filter(function (x) { return x[0] === inp[f.k]; })[0];
-      return txt(o ? o[1] : String(inp[f.k]), "input");
-    }
-    if (f.type === "check") return txt(inp[f.k] ? "Yes" : "No", "input");
-    if (f.type === "text") return txt(String(inp[f.k] || ""), "input");
-    if (f.type === "pct") return cell(inp[f.k] / 100, "pct", "input", { fmt: FMT.pctIn });
-    if (f.type === "int") return cell(inp[f.k], "int", "input");
-    return cell(inp[f.k], "money", "input");
-  }
-  function fieldLabel(label, inp) { return String(label).replace("{P}", platLabel(inp)); }
-  function inputRowsFor(host, inp, S, opts) {
-    opts = opts || {};
-    var rows = [];
-    function addField(f) {
-      if (f.pair) { f.pair.forEach(addField); return; }
-      if (f.group) { f.fields.forEach(addField); return; }
-      if (f.showIf && !f.showIf(inp) && !opts.all) return;
-      if (f.type === "readout") { rows.push([txt(f.label, "label"), cell(S, "int", "label")]); return; }
-      var dimmed = (f.dependsOn && !inp[f.dependsOn]) || (f.toggle && !inp[f.toggle]);
-      var lab = txt(fieldLabel(f.label, inp), "label", { color: dimmed ? LIGHT.muted : undefined });
-      var row = [lab, fieldValue(f, inp)];
-      if (f.toggle) row.push(txt(inp[f.toggle] ? "on" : "off", "input", { color: inp[f.toggle] ? undefined : LIGHT.muted, align: "center" }));
-      rows.push(row);
-    }
-    SECTIONS.forEach(function (s) {
-      if (host && s.host !== host) return;
-      rows.push([txt(s.title, "subhead", { span: 3 })]);
-      s.fields.forEach(addField);
-      if (!opts.compact) rows.push(blank());
-    });
-    return rows;
-  }
-
-  function buildSheets(inputs, n, Model, opts) {
-    opts = opts || {};
-    var M = Model;
-    var b = bundle(inputs, n, M);
-    var inp = b.inp, r = b.r, S = b.S;
-    var ctx = { inp: inp, r: r, date: opts.date ? (typeof opts.date === "string" ? opts.date : localDate(opts.date)) : localDate() };
-    var sheets = [];
-
-    // 1. Overview ---------------------------------------------------------------
-    (function () {
-      var W = 8, rows = topBlock("Overview", ctx, W);
-      rows.push(heading("Headline numbers", W));
-      headlineRows(b).forEach(function (h) {
-        var st = h.key === "net" ? "total" : "label";
-        var v;
-        if (h.t === "text") v = txt(h.v, st, { align: "right" });
-        else if (h.key === "net") v = cell(h.v, "money", "total", { fmt: FMT.signed0, sign: true });
-        else if (h.t === "int") v = cell(h.v, "int", st);
-        else v = cell(h.v, "money", st, { fmt: h.key === "hl" ? FMT.money0 : FMT.money });
-        rows.push([null, txt(h.label, st), v, txt(h.sub, "muted")]);
-      });
-      rows.push([null, txt("Buyer pays at the door", "label"), cell(r.buyerPaysDoor, "money", "label"), txt(inp.doorPriceOn ? "Door price " + priceText(inp.doorPrice) + " plus any on-top tax" : "Same face price as online, plus any on-top tax", "muted")]);
-      rows.push(blank());
-
-      rows.push(heading("Where the money goes", W));
-      rows.push([null, txt("At " + r.n + " tickets: buyers paid " + fmt$(r.buyersPaid) + (r.otherIncome ? " plus " + fmt$(r.otherIncome) + " other income" : ""), "muted")]);
-      rows.push([null, txt("Goes to", "subhead"), txt("Amount", "subhead", { align: "right" }), txt("Share", "subhead", { align: "right" }), txt("Per ticket sold", "subhead", { align: "right" })]);
-      moneyRows(r, inp).forEach(function (m) {
-        var st = m.cls === "total" ? "total" : "label";
-        var col = m.cls === "loss" ? LIGHT.critText : undefined;
-        rows.push([
-          m.cat ? txt("", "label", { fill: m.cat.hex }) : null,
-          txt(m.label, st, { color: col }),
-          cell(m.v, "money", st, { color: col, tag: "money-goes", kind: m.cls || "cat" }),
-          m.share === null ? txt("", st) : cell(m.share, "pct", st, { color: col }),
-          cell(m.perTicket, "money", st, { color: col })
-        ]);
-      });
-      if (r.money.loss > 0.005) rows.push([null, txt("Shortfall " + fmt$(r.money.loss) + ": costs and pass-throughs exceed the " + fmt$(r.inflow) + " coming in.", "label", { color: LIGHT.critText, bold: true })]);
-      rows.push(blank());
-
-      rows.push(heading("Scenarios at this price", W));
-      rows.push([null, txt("At " + priceText(inp.price) + " a ticket", "muted")]);
-      rows.push([null, txt("Sold", "subhead"), txt("Tickets", "subhead", { align: "right" }), txt("Net ticket revenue", "subhead", { align: "right" }),
-        txt("Headliner pay", "subhead", { align: "right" }), txt("Total costs", "subhead", { align: "right" }), txt("Net", "subhead", { align: "right" })]);
-      scenarioRows(b).forEach(function (s) {
-        var here = s.n === r.n ? LIGHT.accentWash : undefined;
-        rows.push([null, txt(s.sold, "label", { fill: here }), cell(s.n, "int", "label", { fill: here }), cell(s.netTix, "money", "label", { fmt: FMT.money0, fill: here }),
-          cell(s.hlPay, "money", "label", { fmt: FMT.money0, fill: here }), cell(s.costs, "money", "label", { fmt: FMT.money0, fill: here }),
-          cell(s.net, "money", "label", { fmt: FMT.signed0, sign: true, bold: true, fill: here })]);
-      });
-      rows.push(blank());
-
-      rows.push(heading("Net profit by price and attendance", W));
-      rows.push([null, txt("Blue is profit, red is loss, gray is about $0. Rows: share of sellable and tickets sold; columns: ticket price.", "muted")]);
-      var hg = heatGrid(inp, M);
-      rows.push([null, txt("Sold \\ price", "subhead")].concat(hg.prices.map(function (p) {
-        return cell(p, "money", "subhead", { fmt: FMT.money0, align: "center", bold: true, color: Math.abs(p - inp.price) < 0.005 ? LIGHT.ink : undefined });
-      })));
-      hg.rows.forEach(function (row) {
-        var cur = row.n === r.n;
-        rows.push([null, txt(row.p + "% · " + row.n + " tix", "label", { align: "right", bold: cur, color: cur ? LIGHT.ink : LIGHT.ink2 })].concat(row.cells.map(function (c) {
-          var hc = heatColor(c), here = cur && Math.abs(c.price - inp.price) < 0.005;
-          return cell(c.net, "money", "label", { fmt: FMT.money0, fill: hc.fill, color: hc.text, bold: true, align: "center", tag: "heat", box: here ? LIGHT.ink : undefined });
-        })));
-      });
-      rows.push(blank());
-
-      sheets.push({ name: "Overview", columns: [3, 34, 14, 18, 16, 13, 13, 13], rows: rows, freeze: 0 });
-    })();
-
-    // 2. Tickets & fees -----------------------------------------------------------
-    (function () {
-      var rows = topBlock("Tickets & fees", ctx, 3);
-      rows.push(heading("Inputs", 3));
-      rows = rows.concat(inputRowsFor("in-tickets", inp, S));
-      rows.push(heading("Per ticket", 3));
-      var p = r.perTicketPrices;
-      rows.push([txt(fmt$(inp.price, { cents: true }) + " face price" + (inp.doorPriceOn ? ", " + fmt$(p.doorPrice, { cents: true }) + " at the door" : ""), "muted")]);
-      rows = rows.concat(pairRows(perTicketRows(r, inp), 0));
-      rows.push(blank());
-      rows.push(heading("Ticket money", 3));
-      rows.push([txt(r.n + " sold + " + inp.comps + " comps = " + (r.n + inp.comps) + " attending", "muted")]);
-      rows = rows.concat(pairRows(ticketMoneyRows(r, inp), 0));
-      sheets.push({ name: "Tickets & fees", columns: [52, 30, 8], rows: rows, freeze: TOP_ROWS });
-    })();
-
-    // 3. Venue ----------------------------------------------------------------------
-    (function () {
-      var rows = topBlock("Venue", ctx, 3);
-      rows.push(heading("Deal", 3));
-      rows = rows.concat(inputRowsFor("in-venue", inp, S));
-      rows.push(heading("What the venue takes", 3));
-      rows.push([txt(venueDescription(inp), "muted")]);
-      rows.push([txt("Part", "subhead"), txt("At " + r.n + " tickets", "subhead", { align: "right" }), txt("Sold out (" + S + ")", "subhead", { align: "right" })]);
-      venueRows(r, b.soldOut, inp).forEach(function (v) {
-        var st = v.cls === "total" ? "total" : "label";
-        rows.push([txt(v.label, st),
-          v.on ? cell(v.now, "money", st) : txt("off", st, { color: LIGHT.muted, align: "right" }),
-          v.on ? cell(v.out, "money", st) : txt("off", st, { color: LIGHT.muted, align: "right" })]);
-      });
-      rows.push(blank());
-      rows.push([txt("The % of door and the per-head fee come out of ticket revenue. The flat rental is a cost line, so it also counts toward contingency.", "muted", { span: 3, wrap: true })]);
-      sheets.push({ name: "Venue", columns: [44, 36, 16], rows: rows, freeze: 0 });
-    })();
-
-    // 4. Talent ---------------------------------------------------------------------
-    (function () {
-      var rows = topBlock("Talent", ctx, 3);
-      rows.push(heading("Deal", 3));
-      rows = rows.concat(inputRowsFor("in-talent", inp, S));
-      rows.push(heading("Headliner payout", 3));
-      rows.push([txt("At " + r.n + " tickets", "muted")]);
-      rows = rows.concat(pairRows(headlinerRows(r, inp, b.hlBE), 0));
-      rows.push(blank());
-      rows.push(heading("Total talent cost", 3));
-      rows.push([txt("At " + r.n + " tickets", "muted")]);
-      rows = rows.concat(pairRows(talentRows(r, inp), 0));
-      sheets.push({ name: "Talent", columns: [62, 38, 8], rows: rows, freeze: TOP_ROWS });
-    })();
-
-    // 5. Costs ----------------------------------------------------------------------
-    (function () {
-      var rows = topBlock("Costs", ctx, 3);
-      rows.push(heading("Cost ledger at " + r.n + " tickets", 3));
-      ledgerGroups(r, inp).forEach(function (g) {
-        rows.push([txt(g.title, "subhead", { span: 2 })]);
-        if (!g.rows.length) rows.push([txt("No custom cost lines", "muted", { indent: 1 })]);
-        g.rows.forEach(function (l) {
-          var lab = txt(l.label, "label", { indent: 1, color: l.role === "info" ? LIGHT.ink2 : undefined, wrap: l.label.length > 50 ? true : undefined });
-          var val = l.off ? txt("off", "label", { color: LIGHT.muted, align: "right", tag: l.role })
-            : cell(l.v, "money", l.input ? "input" : "label", { tag: l.role, color: l.role === "info" ? LIGHT.ink2 : undefined });
-          rows.push([lab, val]);
-        });
-        rows.push([txt(g.subtotal.label, "subtotal"), cell(g.subtotal.v, "money", "subtotal", { tag: "subtotal" })]);
-        rows.push(blank());
-      });
-      rows.push([txt("Contingency (" + inp.contingencyPct + "% of " + fmt$(r.contingencyBase, { cents: true }) + ")", "label"), cell(r.contingency, "money", "label", { tag: "line" }), cell(inp.contingencyPct / 100, "pct", "input", { fmt: FMT.pctIn })]);
-      rows.push([txt(CONTINGENCY_HINT, "muted", { span: 3, wrap: true })]);
-      rows.push([txt("Total costs", "total"), cell(r.totalCosts, "money", "total", { tag: "total-costs" })]);
-      rows.push(blank());
-      rows.push(heading("Net", 3));
-      rows.push([txt("Net ticket revenue (after tax, fees and the venue's cut)", "label"), cell(r.netTicketRevenue, "money", "label", { tag: "net-tix" })]);
-      rows.push([txt("Other income (merch, sponsor)", "label"), cell(r.otherIncome, "money", "input", { tag: "other-income" })]);
-      rows.push([txt("Minus total costs", "label"), cell(-r.totalCosts, "money", "label")]);
-      rows.push([txt("Net at " + r.n + " tickets", "total"), cell(r.net, "money", "total", { sign: true, tag: "net" })]);
-      rows.push(blank());
-      rows.push(heading("Costs by category", 3));
-      rows.push([txt("Category", "subhead"), txt("Amount", "subhead", { align: "right" })]);
-      costCategoryRows(r).forEach(function (c) {
-        var st = c.cls === "total" ? "total" : "label";
-        rows.push([txt(c.label, st), cell(c.v, "money", st)]);
-      });
-      sheets.push({ name: "Costs", columns: [58, 16, 10], rows: rows, freeze: TOP_ROWS });
-    })();
-
-    // 6. Profit by tickets ------------------------------------------------------------
-    (function () {
-      var rows = topBlock("Profit by tickets", ctx, 5);
-      rows.push([txt("Net profit for every ticket count at " + priceText(inp.price) + " a ticket (stands in for the chart on the page).", "muted")]);
-      rows.push([txt("Tickets", "subhead", { align: "right" }), txt("Net ticket revenue", "subhead", { align: "right" }), txt("Total costs", "subhead", { align: "right" }),
-        txt("Net", "subhead", { align: "right" }), txt("", "subhead")]);
-      var header = rows.length;
-      b.sw.forEach(function (p) {
-        var x = M.compute(inp, p.n, { hlBE: b.hlBE });
-        var notes = [];
-        if (b.be !== null && p.n === b.be) notes.push("Break-even");
-        if (p.n === r.n) notes.push("Chosen count");
-        var fill = p.n === r.n ? LIGHT.accentWash : (b.be !== null && p.n === b.be) ? "#fdf0d5" : undefined;
-        var bold = !!notes.length;
-        rows.push([cell(p.n, "int", "label", { fill: fill, bold: bold, tag: "sweep" }), cell(x.netTicketRevenue, "money", "label", { fill: fill, bold: bold }),
-          cell(x.totalCosts, "money", "label", { fill: fill, bold: bold }), cell(p.net, "money", "label", { fill: fill, bold: true, sign: true }),
-          txt(notes.join(", "), "label", { fill: fill, bold: bold })]);
-      });
-      sheets.push({ name: "Profit by tickets", columns: [10, 20, 16, 16, 24], rows: rows, freeze: header });
-    })();
-
-    // 7. Scenario -----------------------------------------------------------------------
-    (function () {
-      var rows = topBlock("Scenario", ctx, 3);
-      rows.push(heading("Every input", 3));
-      rows.push([txt("Names", "subhead", { span: 3 })]);
-      rows.push([txt("Show / event", "label"), txt(String(inp.showName || ""), "input")]);
-      rows.push([txt("Venue", "label"), txt(String(inp.venueName || ""), "input")]);
-      rows.push([txt("Tickets sold (this snapshot)", "label"), cell(r.n, "int", "input")]);
-      rows.push(blank());
-      rows = rows.concat(inputRowsFor(null, inp, S, { all: true }));
-      LEDGER.forEach(function (g) {
-        rows.push([txt(g.title, "subhead", { span: 3 })]);
-        g.rows.forEach(function (f) {
-          if (f.pay) {
-            rows.push([txt(f.label + ": people", "label", { color: inp[f.toggle] ? undefined : LIGHT.muted }), cell(inp[f.k], "int", "input"),
-              txt(inp[f.toggle] ? "on" : "off", "input", { color: inp[f.toggle] ? undefined : LIGHT.muted, align: "center" })]);
-            rows.push([txt(f.label + ": pay each", "label", { color: inp[f.toggle] ? undefined : LIGHT.muted }), cell(inp[f.pay], "money", "input")]);
-            return;
-          }
-          var row = [txt(f.label, "label", { color: f.toggle && !inp[f.toggle] ? LIGHT.muted : undefined }), cell(inp[f.k], "money", "input")];
-          if (f.toggle) row.push(txt(inp[f.toggle] ? "on" : "off", "input", { color: inp[f.toggle] ? undefined : LIGHT.muted, align: "center" }));
-          rows.push(row);
-        });
-        rows.push(blank());
-      });
-      rows.push([txt("Other costs and income", "subhead", { span: 3 })]);
-      inp.custom.forEach(function (c, i) {
-        rows.push([txt("Custom cost line " + (i + 1) + ": " + (String(c.name || "").trim() || "(no name)"), "label"), cell(c.amount, "money", "input")]);
-      });
-      if (!inp.custom.length) rows.push([txt("Custom cost lines", "label"), txt("none", "label", { color: LIGHT.muted })]);
-      rows.push([txt("Contingency", "label"), cell(inp.contingencyPct / 100, "pct", "input", { fmt: FMT.pctIn })]);
-      rows.push([txt("Other income (merch, sponsor)", "label"), cell(inp.otherIncome, "money", "input")]);
-      rows.push([txt("Default tickets sold (% of sellable, used when a code has no count)", "label"), cell(inp.expectedPct / 100, "pct", "input", { fmt: FMT.pctIn })]);
-      rows.push(blank());
-      rows.push(heading("Scenario code", 3));
-      rows.push([txt("Paste this into Share > Load a scenario code at " + PAGE_URL + " to reopen this scenario.", "muted", { span: 3, wrap: true })]);
-      rows.push([txt(encodeScenario(inp, r.n, M), "label", { span: 3, wrap: true, mono: true, tag: "scenario-code" })]);
-      sheets.push({ name: "Scenario", columns: [56, 34, 8], rows: rows, freeze: TOP_ROWS });
-    })();
-
-    return sheets;
-  }
-
-  // ---------------------------------------------------------------- ExcelJS writer (thin)
-  function argb(hex) { return "FF" + String(hex).replace("#", "").toUpperCase(); }
-  function writeWorkbook(ExcelJS, sheets) {
-    var wb = new ExcelJS.Workbook();
-    wb.creator = "Show Feasibility";
-    wb.created = new Date();
-    var FONT = "Calibri";
-    function border(color, style) { return { style: style || "thin", color: { argb: argb(color) } }; }
-
-    sheets.forEach(function (sh) {
-      var views = [{ showGridLines: false }];
-      if (sh.freeze) views = [{ state: "frozen", xSplit: 0, ySplit: sh.freeze, showGridLines: false }];
-      var ws = wb.addWorksheet(sh.name, {
-        views: views,
-        pageSetup: { paperSize: 1, orientation: "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0,
-          margins: { left: 0.5, right: 0.5, top: 0.6, bottom: 0.6, header: 0.3, footer: 0.3 } }
-      });
-      ws.columns = sh.columns.map(function (w) { return { width: w }; });
-      var ncols = sh.columns.length;
-
-      sh.rows.forEach(function (row, ri) {
-        var exRow = ws.getRow(ri + 1);
-        var maxLines = 1;
-        (row || []).forEach(function (c, ci) {
-          if (!c) return;
-          var x = exRow.getCell(ci + 1);
-          var st = c.style || "label";
-          var font = { name: FONT, size: 11, color: { argb: argb(LIGHT.ink) } };
-          var fill = null, bd = {}, al = { vertical: "middle" };
-          if (st === "title") { font.size = 16; font.bold = true; }
-          else if (st === "heading") { font.size = 12; font.bold = true; font.color = { argb: argb(LIGHT.accent) }; fill = LIGHT.accentWash; bd.bottom = border(LIGHT.accent); }
-          else if (st === "subhead") { font.size = 9; font.bold = true; font.color = { argb: argb(LIGHT.ink2) }; bd.bottom = border(LIGHT.line); }
-          else if (st === "muted") { font.size = 10; font.color = { argb: argb(LIGHT.ink2) }; }
-          else if (st === "subtotal") { font.bold = true; bd.top = border(LIGHT.axis); }
-          else if (st === "total") { font.bold = true; font.size = 12; bd.top = border(LIGHT.axis); }
-          else if (st === "input") { fill = LIGHT.input; bd = { top: border(LIGHT.fieldLine), bottom: border(LIGHT.fieldLine), left: border(LIGHT.fieldLine), right: border(LIGHT.fieldLine) }; }
-
-          if (c.t === "link") {
-            x.value = { text: String(c.v), hyperlink: String(c.v) };
-            font.color = { argb: argb(LIGHT.accent) }; font.underline = true;
-          } else if (c.t === "money" || c.t === "int" || c.t === "pct") {
-            x.value = typeof c.v === "number" && isFinite(c.v) ? c.v : 0;
-            x.numFmt = c.fmt || (c.t === "money" ? FMT.money : c.t === "int" ? FMT.int : FMT.pct);
-            al.horizontal = "right";
-          } else {
-            x.value = c.v == null ? "" : String(c.v);
-          }
-          if (c.bold) font.bold = true;
-          if (c.color) font.color = { argb: argb(c.color) };
-          if (c.sign && typeof c.v === "number") {
-            if (c.v >= 0.5) font.color = { argb: argb(LIGHT.goodText) };
-            else if (c.v <= -0.5) font.color = { argb: argb(LIGHT.critText) };
-          }
-          if (c.fill) fill = c.fill;
-          if (c.align) al.horizontal = c.align;
-          if (c.indent) al.indent = c.indent;
-          if (c.box) { var bb = border(c.box, "medium"); bd = { top: bb, bottom: bb, left: bb, right: bb }; }
-
-          x.font = font;
-          if (fill) x.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(fill) } };
-          if (Object.keys(bd).length) x.border = bd;
-
-          var span = Math.min(c.span || 1, ncols - ci);
-          // Long text would be cut off by a filled neighbour: wrap it inside its own column instead.
-          var neighbour = row[ci + 1];
-          if (!c.wrap && span === 1 && c.t === "text" && neighbour && neighbour.v !== "" && neighbour.v != null &&
-              String(c.v).length > sh.columns[ci] * 1.1) c = Object.assign({}, c, { wrap: true });
-          if (c.wrap) {
-            al.wrapText = true; al.vertical = "top";
-            var chars = 0;
-            for (var k = 0; k < span; k++) chars += sh.columns[ci + k];
-            var perLine = Math.max(10, chars * 1.1);
-            maxLines = Math.max(maxLines, Math.ceil(String(c.v).length / perLine));
-            if (span > 1) ws.mergeCells(ri + 1, ci + 1, ri + 1, ci + span);
-          }
-          x.alignment = al;
-          // Carry fills and borders across the spanned cells (headings, table headers) without merging.
-          if (span > 1 && !c.wrap) {
-            for (var j = 1; j < span; j++) {
-              var y = exRow.getCell(ci + 1 + j);
-              if (fill) y.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(fill) } };
-              if (Object.keys(bd).length) y.border = bd;
-            }
-          }
-        });
-        if (maxLines > 1) exRow.height = Math.min(409, Math.ceil(maxLines * 15 + 3)); // Excel's row height limit is 409 points
-        else if (row && row[0] && row[0].style === "title") exRow.height = 24;
-      });
-      if (sh.freeze) ws.pageSetup.printTitlesRow = "1:" + sh.freeze;
-    });
-    return wb;
-  }
-
   function fileSlug(inp) {
     var s = String(inp.showName || "").trim() || String(inp.venueName || "").trim() || "scenario";
     s = s.toLowerCase().normalize ? s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "") : s.toLowerCase();
@@ -1006,7 +572,7 @@
   }
 
   return {
-    PAGE_URL: PAGE_URL, SNAPSHOT_NOTE: SNAPSHOT_NOTE, MINUS: MINUS, LIGHT: LIGHT, FMT: FMT,
+    PAGE_URL: PAGE_URL, MINUS: MINUS, LIGHT: LIGHT, FMT: FMT,
     // formatting and wording
     fmt$: fmt$, fmtCompact: fmtCompact, fmtPct: fmtPct, fmtInt: fmtInt, statusOf: statusOf, STATUS_LABEL: STATUS_LABEL,
     priceText: priceText, platName: platName, platLabel: platLabel,
@@ -1015,9 +581,7 @@
     // rows
     bundle: bundle, headlineRows: headlineRows, moneyRows: moneyRows, scenarioRows: scenarioRows, heatGrid: heatGrid, mixOklab: mixOklab, heatColor: heatColor,
     perTicketRows: perTicketRows, ticketMoneyRows: ticketMoneyRows, headlinerRows: headlinerRows, talentRows: talentRows, venueRows: venueRows,
-    costCategoryRows: costCategoryRows, ledgerGroups: ledgerGroups, ledgerLineValue: ledgerLineValue, crewLabel: crewLabel,
-    encodeScenario: encodeScenario, LINK_BASE: LINK_BASE, encodeLink: encodeLink, decodeShared: decodeShared, localDate: localDate, fileName: fileName,
-    // export
-    buildSheets: buildSheets, writeWorkbook: writeWorkbook
+    costCategoryRows: costCategoryRows,
+    encodeScenario: encodeScenario, LINK_BASE: LINK_BASE, encodeLink: encodeLink, decodeShared: decodeShared, localDate: localDate, fileName: fileName
   };
 });
