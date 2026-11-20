@@ -28,6 +28,12 @@
  *    revenue (so they count in every break-even and in the "our net" basis); the
  *    rental is a fixed cost and, as before, sits in the contingency base. The
  *    per-head fee is NOT in the contingency base (like the door %).
+ *  - Fee cap (ebCapOn): the whole online fee per ticket (service + processing) is
+ *    min(fee, ebCap); service and processing are scaled by the same factor. Pass
+ *    mode: buyer pays gross + capped fee. Door card fees are never capped.
+ *  - Headliner cap (hlCapOn): deal pay and backend together never exceed
+ *    max(hlCap, guarantee); the deal fills the cap first, the backend gets the rest.
+ *    Travel and hospitality sit outside the cap.
  *  - Old saved scenarios: a missing venueRentalOn means "on if venueRental > 0";
  *    a missing door % toggle means on; a missing platform preset is detected from
  *    the three platform rates. Only missing keys are migrated, so sanitize is
@@ -67,6 +73,8 @@
     ebServiceFixed: 1.79,
     ebProcPct: 2.9,
     ebMode: "pass",           // "pass" | "absorb"
+    ebCapOn: true,            // the platform caps its fee per online ticket
+    ebCap: 5.5,
     // Venue deal: parts sum
     doorCutOn: true,
     doorCutPct: 15,
@@ -91,6 +99,8 @@
     hlBackendOn: false,
     hlBackendPct: 20,
     hlVersus: false,
+    hlCapOn: false,           // cap on everything the deal pays (never below the guarantee)
+    hlCap: 1500,
     hlTravel: 90,
     hlHospitality: 50,
     // Lineup
@@ -241,16 +251,23 @@
     // Ticketing platform (online only)
     var P = on.P;
     var ebProc = inp.ebProcPct / 100;
-    var ebService = inp.ebServicePct / 100 * P + inp.ebServiceFixed;
-    var onlineBuyerPer, ebProcPer;
+    var ebServiceU = inp.ebServicePct / 100 * P + inp.ebServiceFixed;
+    var onlineBuyerU, ebProcU;
     if (inp.ebMode === "pass") {
-      onlineBuyerPer = (on.gross + ebService) / (1 - ebProc);
-      ebProcPer = onlineBuyerPer * ebProc;
+      onlineBuyerU = (on.gross + ebServiceU) / (1 - ebProc);
+      ebProcU = onlineBuyerU * ebProc;
     } else {
-      onlineBuyerPer = on.gross;
-      ebProcPer = on.gross * ebProc;
+      onlineBuyerU = on.gross;
+      ebProcU = on.gross * ebProc;
     }
-    var ebFeePer = ebService + ebProcPer;
+    var ebFeeU = ebServiceU + ebProcU;
+    // Fee cap: the whole fee per online ticket stops at ebCap; service and processing shrink together.
+    var ebCapped = inp.ebCapOn && ebFeeU > inp.ebCap;
+    var capK = ebCapped ? inp.ebCap / ebFeeU : 1;
+    var ebService = ebServiceU * capK;
+    var ebProcPer = ebProcU * capK;
+    var ebFeePer = ebCapped ? inp.ebCap : ebFeeU;
+    var onlineBuyerPer = !ebCapped ? onlineBuyerU : inp.ebMode === "pass" ? on.gross + ebFeePer : on.gross;
     var ebAbsorbedPer = inp.ebMode === "absorb" ? ebFeePer : 0;
     var ebPassedPer = inp.ebMode === "pass" ? ebFeePer : 0;
 
@@ -292,6 +309,7 @@
         faceNet: on.faceNet, tax: on.tax, gross: on.gross,
         ebService: ebService, ebProc: ebProcPer, ebFee: ebFeePer,
         ebAbsorbed: ebAbsorbedPer, ebPassed: ebPassedPer,
+        ebServiceU: ebServiceU, ebFeeU: ebFeeU, ebCapK: capK, ebCapped: ebCapped,
         onlineBuyer: onlineBuyerPer,
         doorPrice: dr.P, doorFaceNet: dr.faceNet, doorTax: dr.tax, doorGross: dr.gross,
         doorBuyer: doorBuyerPer, doorCardProc: doorCardProcPer
@@ -405,11 +423,17 @@
     } else {
       dealPay = guarantee + variable;
     }
+    // Pay cap: covers the deal and the backend, never below the guarantee.
+    var capEff = inp.hlCapOn ? Math.max(inp.hlCap, guarantee) : Infinity;
+    var hlCapped = dealPay > capEff;
+    if (hlCapped) dealPay = capEff;
+    if (inp.hlVersus) versusOverage = dealPay - guarantee;
     // Everything except the guarantee (already in fixed costs) that the deal adds
     var variableExtra = dealPay - guarantee;
 
     var netBeforeBackend = ts.netTicketRevenue + inp.otherIncome - fc.total - variableExtra;
     var backend = inp.hlBackendOn ? Math.max(0, netBeforeBackend) * inp.hlBackendPct / 100 : 0;
+    if (backend > capEff - dealPay) { backend = capEff - dealPay; hlCapped = true; }
     var net = netBeforeBackend - backend;
 
     var headlinerPay = dealPay + backend;
@@ -477,6 +501,7 @@
         versusOverage: versusOverage,
         dealPay: dealPay,
         backend: backend,
+        capped: hlCapped,
         pay: headlinerPay,
         travel: L.headlinerTravel,
         hospitality: L.headlinerHospitality,

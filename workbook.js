@@ -101,17 +101,20 @@
 
   // Per-ticket constants for an online price P and door price DP, mirroring model.ticketSide().
   // R(key) gives the reference to an earlier constant.
-  var PT_KEYS = ["fn", "tx", "gr", "svc", "buyer", "proc", "fee", "abs", "pass", "dfn", "dtx", "dgr", "dcp"];
+  var PT_KEYS = ["fn", "tx", "gr", "svcU", "feeU", "fee", "svc", "proc", "buyer", "abs", "pass", "dfn", "dtx", "dgr", "dcp"];
   function ptFormulas(P, DP, R) {
     var INC = "TaxMode=" + str(TAX_LABEL.included);
     return {
       fn: "IF(" + INC + "," + P + "/(1+TaxR)," + P + ")",
       tx: "IF(" + INC + "," + P + "-" + R("fn") + "," + P + "*TaxR)",
       gr: P + "+IF(" + INC + ",0," + R("tx") + ")",
-      svc: "SvcPct*" + P + "+SvcFixed",
-      buyer: "IF(FeeMode=" + str(FEE_LABEL.pass) + ",(" + R("gr") + "+" + R("svc") + ")/(1-ProcPct)," + R("gr") + ")",
-      proc: R("buyer") + "*ProcPct",
-      fee: R("svc") + "+" + R("proc"),
+      svcU: "SvcPct*" + P + "+SvcFixed",
+      feeU: "IF(FeeMode=" + str(FEE_LABEL.pass) + ",(" + R("gr") + "+" + R("svcU") + ")/(1-ProcPct)-" + R("gr") + "," + R("svcU") + "+" + R("gr") + "*ProcPct)",
+      // Fee cap: the whole fee stops at FeeCap; service and processing shrink together.
+      fee: "IF(AND(FeeCapOn=\"On\"," + R("feeU") + ">FeeCap),FeeCap," + R("feeU") + ")",
+      svc: "IF(" + R("feeU") + ">0," + R("svcU") + "*" + R("fee") + "/" + R("feeU") + "," + R("svcU") + ")",
+      proc: R("fee") + "-" + R("svc"),
+      buyer: R("gr") + "+IF(FeeMode=" + str(FEE_LABEL.pass) + "," + R("fee") + ",0)",
       abs: "IF(FeeMode=" + str(FEE_LABEL.absorb) + "," + R("fee") + ",0)",
       pass: "IF(FeeMode=" + str(FEE_LABEL.pass) + "," + R("fee") + ",0)",
       dfn: "IF(" + INC + "," + DP + "/(1+TaxR)," + DP + ")",
@@ -121,7 +124,7 @@
     };
   }
   function ptValues(pt) { // model perTicketPrices -> PT_KEYS values
-    return { fn: pt.faceNet, tx: pt.tax, gr: pt.gross, svc: pt.ebService, buyer: pt.onlineBuyer, proc: pt.ebProc, fee: pt.ebFee,
+    return { fn: pt.faceNet, tx: pt.tax, gr: pt.gross, svcU: pt.ebServiceU, feeU: pt.ebFeeU, svc: pt.ebService, buyer: pt.onlineBuyer, proc: pt.ebProc, fee: pt.ebFee,
       abs: pt.ebAbsorbed, pass: pt.ebPassed, dfn: pt.doorFaceNet, dtx: pt.doorTax, dgr: pt.doorGross, dcp: pt.doorCardProc };
   }
   // Ticket side at a count N (a reference), given the per-ticket constant references K(key), P and DP.
@@ -153,13 +156,17 @@
   // Headliner and profit at count N from a ticket-side block, mirroring computeCore().
   var DEAL_KEYS = ["pct", "pt", "deal", "nbb", "backend", "net", "ok"];
   var DEAL_LABEL = { pct: "% part", pt: "$ per ticket part", deal: "Deal pay", nbb: "Net before backend", backend: "Backend", net: "Net", ok: "Breaks even (1)" };
+  // Headliner pay cap: deal pay and backend together never above MAX(HLCap, guarantee).
+  var CAP_AMT = "MAX(HLCap,GuaranteeAmt)";
+  function capDeal(f) { return "IF(HLCapOn=\"On\",MIN(" + CAP_AMT + "," + f + ")," + f + ")"; }
+  function capBackend(f, deal) { return "IF(HLCapOn=\"On\",MIN(" + CAP_AMT + "-" + deal + "," + f + ")," + f + ")"; }
   function dealFormulas(N, R, pctThr, ptThr, hbThr) {
     return {
       pct: "IF(AND(HLPctOn=\"On\"," + N + ">" + pctThr + "),MAX(0," + R("hb") + "-" + hbThr + ")*HLPct,0)",
       pt: "IF(HLPerTicketOn=\"On\",MAX(0," + N + "-" + ptThr + ")*HLPerTicket,0)",
-      deal: "IF(HLVersus=\"Yes\",MAX(GuaranteeAmt," + R("pct") + "+" + R("pt") + "),GuaranteeAmt+" + R("pct") + "+" + R("pt") + ")",
+      deal: capDeal("IF(HLVersus=\"Yes\",MAX(GuaranteeAmt," + R("pct") + "+" + R("pt") + "),GuaranteeAmt+" + R("pct") + "+" + R("pt") + ")"),
       nbb: R("ntr") + "+OtherIncome-FixedTotal-(" + R("deal") + "-GuaranteeAmt)",
-      backend: "IF(HLBackendOn=\"On\",MAX(0," + R("nbb") + ")*HLBackendPct,0)",
+      backend: capBackend("IF(HLBackendOn=\"On\",MAX(0," + R("nbb") + ")*HLBackendPct,0)", R("deal")),
       net: R("nbb") + "-" + R("backend"),
       ok: "IF(" + R("net") + ">=-" + EPS + ",1,0)"
     };
@@ -257,6 +264,7 @@
     inRow("Service fee", yPct(inp.ebServicePct, "SvcPct"));
     inRow("Plus per ticket", yMoney(inp.ebServiceFixed, "SvcFixed"));
     inRow("Payment processing", yPct(inp.ebProcPct, "ProcPct", 0.5), null, "Up to 50%.");
+    inRow("Fees capped at, per ticket", yMoney(inp.ebCap, "FeeCap"), yOn(inp.ebCapOn, "FeeCapOn"), "Service and processing together, per online ticket.");
     I.add([]);
 
     heading(I, "Venue", 4);
@@ -278,6 +286,7 @@
     inRow("Backend: % of profit after break-even", yPct(inp.hlBackendPct, "HLBackendPct"), yOn(inp.hlBackendOn, "HLBackendOn"));
     inRow("Versus: pay the greater of the guarantee or the % and per-ticket parts",
       cell(inp.hlVersus ? YES : NO, "text", "input", { name: "HLVersus", dv: choice([YES, NO]), align: "center" }), null, "Backend is still added on top.");
+    inRow("Cap total pay at", yMoney(inp.hlCap, "HLCap"), yOn(inp.hlCapOn, "HLCapOn"), "Guarantee, %, per ticket and backend together. Never below the guarantee.");
     inRow("Travel / hotel", yMoney(inp.hlTravel, "HLTravel"));
     inRow("Hospitality / rider", yMoney(inp.hlHospitality, "HLHospitality"));
     I.add([]);
@@ -340,12 +349,14 @@
       ["doorPrice", "DoorPrice", "money"], ["doorCashPct", "DoorCashPct", "pct"], ["doorCardPct", "DoorCardPct", "pct"], ["doorCardFixed", "DoorCardFixed", "money"],
       ["taxOn", "TaxOn", "bool"], ["taxRate", "TaxRate", "pct"], ["taxMode", "TaxMode", TAX_LABEL], ["ticketPlatform", "Platform", "text"],
       ["ebServicePct", "SvcPct", "pct"], ["ebServiceFixed", "SvcFixed", "money"], ["ebProcPct", "ProcPct", "pct"], ["ebMode", "FeeMode", FEE_LABEL],
+      ["ebCapOn", "FeeCapOn", "bool"], ["ebCap", "FeeCap", "money"],
       ["doorCutOn", "DoorCutOn", "bool"], ["doorCutPct", "DoorCutPct", "pct"], ["doorCutBasis", "DoorCutBasis", CUT_LABEL],
       ["venueRentalOn", "VenueRentalOn", "bool"], ["venueRental", "VenueRental", "money"], ["venuePerHeadOn", "PerHeadOn", "bool"], ["venuePerHead", "PerHead", "money"],
       ["hlGuaranteeOn", "HLGuaranteeOn", "bool"], ["hlGuarantee", "HLGuarantee", "money"], ["hlPctOn", "HLPctOn", "bool"], ["hlPct", "HLPct", "pct"],
       ["hlPctBasis", "HLPctBasis", BASIS_LABEL], ["hlPctStart", "HLPctStart", START_LABEL], ["hlPctStartN", "HLPctStartN", "int"],
       ["hlPerTicketOn", "HLPerTicketOn", "bool"], ["hlPerTicket", "HLPerTicket", "money"], ["hlPerTicketStart", "HLPerTicketStart", START_LABEL],
       ["hlPerTicketStartN", "HLPerTicketStartN", "int"], ["hlBackendOn", "HLBackendOn", "bool"], ["hlBackendPct", "HLBackendPct", "pct"], ["hlVersus", "HLVersus", "yes"],
+      ["hlCapOn", "HLCapOn", "bool"], ["hlCap", "HLCap", "money"],
       ["hlTravel", "HLTravel", "money"], ["hlHospitality", "HLHospitality", "money"], ["supportSlots", "SupportSlots", "int"], ["supportPrice", "SupportPrice", "money"],
       ["vjOn", "VJOn", "bool"], ["vj", "VJFee", "money"], ["soundTechsOn", "SoundTechsOn", "bool"], ["soundTechs", "SoundTechs", "int"],
       ["soundTechPay", "SoundTechPay", "money"], ["stagehandsOn", "StagehandsOn", "bool"], ["stagehands", "Stagehands", "int"], ["stagehandPay", "StagehandPay", "money"],
@@ -483,9 +494,9 @@
         basis: fx(g('IF(HLPctBasis="' + BASIS_LABEL.grossFace + '",' + ref("gross") + ',IF(HLPctBasis="' + BASIS_LABEL.net + '",' + ref("ntr") + "," + ref("faceNet") + "))"), v(basis), "money", "work"),
         pctPart: fx(g('IF(AND(HLPctOn="On",' + ref("n") + ">PctThreshold),MAX(0," + ref("basis") + "-PctBasisAtStart)*HLPct,0)"), v(x && x.headliner.pctPart), "money", "work"),
         ptPart: fx(g('IF(HLPerTicketOn="On",MAX(0,' + ref("n") + "-PerTicketThreshold)*HLPerTicket,0)"), v(x && x.headliner.perTicketPart), "money", "work"),
-        deal: fx(g('IF(HLVersus="Yes",MAX(GuaranteeAmt,' + ref("pctPart") + "+" + ref("ptPart") + "),GuaranteeAmt+" + ref("pctPart") + "+" + ref("ptPart") + ")"), v(x && x.headliner.dealPay), "money", "work"),
+        deal: fx(g(capDeal('IF(HLVersus="Yes",MAX(GuaranteeAmt,' + ref("pctPart") + "+" + ref("ptPart") + "),GuaranteeAmt+" + ref("pctPart") + "+" + ref("ptPart") + ")")), v(x && x.headliner.dealPay), "money", "work"),
         nbb: fx(g(ref("ntr") + "+OtherIncome-FixedTotal-(" + ref("deal") + "-GuaranteeAmt)"), v(x && x.netBeforeBackend), "money", "work"),
-        backend: fx(g('IF(HLBackendOn="On",MAX(0,' + ref("nbb") + ")*HLBackendPct,0)"), v(x && x.headliner.backend), "money", "work"),
+        backend: fx(g(capBackend('IF(HLBackendOn="On",MAX(0,' + ref("nbb") + ")*HLBackendPct,0)", ref("deal"))), v(x && x.headliner.backend), "money", "work"),
         baseFlag: fx(g("IF(" + ref("base") + ">=-" + EPS + ",1,0)"), v(base >= -1e-9 ? 1 : 0), "int", "work"),
         netFlag: fx(g("IF(" + ref("net") + ">=-" + EPS + ",1,0)"), v(x && x.net >= -1e-9 ? 1 : 0), "int", "work")
       };
@@ -624,7 +635,7 @@
     T.add([null, txt("Deal wording: $ per ticket", "label"), fx('IF(HLPerTicketOn="On",' + moneyTextAuto("HLPerTicket") + '&"/ticket "&' + startTxt("HLPerTicketStart", "HLPerTicketStartN") + ',"")', "", "text", "work", { name: "DealT" })]);
     T.add([null, txt("Deal wording: joined", "label"), fx('MID(IF(DealG<>"",DealSep&DealG,"")&IF(DealP<>"",DealSep&DealP,"")&IF(DealT<>"",DealSep&DealT,""),LEN(DealSep)+1,1000)', "", "text", "work", { name: "DealJ" })]);
     T.add([null, txt("Deal wording: separator", "label"), fx('IF(HLVersus="Yes"," vs "," + ")', inp.hlVersus ? " vs " : " + ", "text", "work", { name: "DealSep" })]);
-    T.add([null, txt("Deal", "label"), fx('IF(DealJ&IF(HLBackendOn="On","x","")="","no pay set",DealJ&IF(HLBackendOn="On",IF(DealJ<>""," + ","")&ROUND(HLBackendPct*100,6)&"% backend",""))',
+    T.add([null, txt("Deal", "label"), fx('IF(DealJ&IF(HLBackendOn="On","x","")="","no pay set",DealJ&IF(HLBackendOn="On",IF(DealJ<>""," + ","")&ROUND(HLBackendPct*100,6)&"% backend","")&IF(HLCapOn="On",", capped at "&' + moneyText(CAP_AMT, false) + ',""))',
       X.hlDescription(inp), "text", "work", { name: "DealText" })]);
 
     // ---------- Tickets & fees
@@ -643,9 +654,12 @@
     ptRow("Ours after sales tax", "fn");
     ptRow(fx(taxLbl, "Sales tax " + (inp.taxOn ? (inp.taxMode === "included" ? "(inside the price)" : "(added on top)") : "(off)"), "text", "label"), "tx");
     ptRow("Online price incl. sales tax", "gr");
+    ptRow(fx(platF("", " service fee before any cap"), pn + " service fee before any cap", "text", "label", { indent: 1 }), "svcU", "sub");
+    ptRow(fx(platF("", " fees before any cap"), pn + " fees before any cap", "text", "label", { indent: 1 }), "feeU", "sub");
     ptRow(fx(platF("", " service fee"), pn + " service fee", "text", "label", { indent: 1 }), "svc", "sub");
     ptRow(fx(platF("", " processing"), pn + " processing", "text", "label", { indent: 1 }), "proc", "sub");
-    ptRow(fx(platF("", " fees ") + '&IF(FeeMode=' + str(FEE_LABEL.pass) + ',"paid by the buyer","absorbed by us")', pn + " fees " + (inp.ebMode === "pass" ? "paid by the buyer" : "absorbed by us"), "text", "label"), "fee");
+    ptRow(fx(platF("", " fees ") + '&IF(FeeMode=' + str(FEE_LABEL.pass) + ',"paid by the buyer","absorbed by us")&IF(AND(FeeCapOn="On",PT_feeU>FeeCap)," (capped at "&' + moneyText("FeeCap", true) + '&")","")',
+      pn + " fees " + (inp.ebMode === "pass" ? "paid by the buyer" : "absorbed by us") + (r.perTicketPrices.ebCapped ? " (capped at " + X.fmt$(inp.ebCap, { cents: true }) + ")" : ""), "text", "label"), "fee");
     ptRow("Fees we absorb, per online ticket", "abs", "sub");
     ptRow("Fees the buyer pays, per online ticket", "pass", "sub");
     ptRow("Buyer pays online", "buyer", "total", { name: "PT_buyer" });
@@ -820,7 +834,7 @@
     def("mid", "Bisection: price tried (cents)");
     def("P", "Ticket price");
     def("DP", "Door price (keeps its markup)");
-    var PT_LBL = { fn: "Ours after sales tax", tx: "Sales tax", gr: "Online price incl. tax", svc: "Service fee", buyer: "Buyer pays online", proc: "Processing",
+    var PT_LBL = { fn: "Ours after sales tax", tx: "Sales tax", gr: "Online price incl. tax", svcU: "Service fee before any cap", feeU: "Platform fees before any cap", svc: "Service fee", buyer: "Buyer pays online", proc: "Processing",
       fee: "Platform fees", abs: "Fees we absorb", pass: "Fees the buyer pays", dfn: "Door: ours after tax", dtx: "Door: sales tax", dgr: "Buyer pays at the door", dcp: "Door card fee" };
     PT_KEYS.forEach(function (k) { def(k, "Per ticket: " + PT_LBL[k]); });
     def("hlBE", "Headliner break-even at this price");

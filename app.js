@@ -741,6 +741,7 @@
     lines.push("At this price: " + b.scen.map(function (s) { return s.pct + "% (" + s.r.n + ") " + fmt$(s.r.net, A); }).join(" | "));
     lines.push("Assumes: " + (inp.taxOn ? "sales tax " + inp.taxRate + "% " + (inp.taxMode === "included" ? "included" : "on top") : "no sales tax") +
       "; " + platLabel(inp) + " fees " + (inp.ebMode === "pass" ? "passed to buyer" : "absorbed") +
+      (inp.ebCapOn ? ", capped at " + fmt$(inp.ebCap, { cents: true }) + "/ticket" : "") +
       "; " + inp.onlinePct + "% online");
     return lines.join("\n");
   }

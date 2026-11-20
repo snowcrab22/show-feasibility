@@ -17,8 +17,9 @@
   var PAGE_URL = "https://snowcrab22.github.io/show-feasibility/";
   var MINUS = "−";
 
-  // Frozen copy of the defaults when share links were introduced (v2). Never edit: links store only
-  // the inputs that differ from this, so changing it would change what old links mean.
+  // Frozen copy of the defaults when share links were introduced (v2). Never change a value: links store
+  // only the inputs that differ from this, so changing one would change what old links mean. New inputs
+  // are added with the value that matches how old links behaved (the fee cap is off for them).
   var LINK_BASE = Object.freeze({
     venueName: "New venue",
     showName: "",
@@ -41,6 +42,8 @@
     ebServiceFixed: 1.79,
     ebProcPct: 2.9,
     ebMode: "pass",
+    ebCapOn: false,
+    ebCap: 5.5,
     doorCutOn: true,
     doorCutPct: 15,
     doorCutBasis: "afterTax",
@@ -63,6 +66,8 @@
     hlBackendOn: false,
     hlBackendPct: 20,
     hlVersus: false,
+    hlCapOn: false,
+    hlCap: 1500,
     hlTravel: 90,
     hlHospitality: 50,
     supportSlots: 3,
@@ -166,7 +171,9 @@
         { k: "ebServiceFixed", label: "Plus per ticket", type: "money", step: 0.01 }
       ] },
       { k: "ebProcPct", label: "Payment processing", type: "pct", step: 0.1,
-        note: "The Eventbrite preset uses its US rates as of Nov 2026 (service 3.7% + $1.79, processing 2.9%). Rates change; check the platform's pricing page." }
+        note: "The Eventbrite preset uses its US rates as of Nov 2026 (service 3.7% + $1.79, processing 2.9%). Rates change; check the platform's pricing page." },
+      { k: "ebCap", toggle: "ebCapOn", label: "Fees capped at, per ticket", type: "money", step: 0.25,
+        hint: "The most the platform charges per online ticket, service and processing together." }
     ] },
     { id: "g-venue", host: "in-venue", title: "Venue deal", hint: "Turn on each part the venue charges. The parts add up.", fields: [
       { k: "doorCutPct", toggle: "doorCutOn", label: "% of door (ticket sales)", type: "pct", step: 0.5 },
@@ -200,7 +207,9 @@
       ] },
       { k: "hlBackendPct", toggle: "hlBackendOn", label: "Backend: % of profit after break-even", type: "pct", step: 1 },
       { k: "hlVersus", label: "Versus: pay the greater of the guarantee or the % and per-ticket parts", type: "check",
-        hint: "Backend is still added on top. Starting points apply only to tickets beyond them." }
+        hint: "Backend is still added on top. Starting points apply only to tickets beyond them." },
+      { k: "hlCap", toggle: "hlCapOn", label: "Cap total pay at", type: "money",
+        hint: "Covers the guarantee, %, per-ticket and backend together. Never below the guarantee; travel and rider aren't included." }
     ] },
     { id: "g-hl-travel", host: "in-talent", title: "Headliner travel & hospitality", fields: [
       { pair: [
@@ -252,6 +261,7 @@
     if (inp.hlPerTicketOn) v.push(fmt$(inp.hlPerTicket, { cents: inp.hlPerTicket % 1 !== 0 }) + "/ticket " + startText(inp.hlPerTicketStart, inp.hlPerTicketStartN));
     var s = inp.hlVersus ? parts.concat(v).join(" vs ") : parts.concat(v).join(" + ");
     if (inp.hlBackendOn) s += (s ? " + " : "") + inp.hlBackendPct + "% backend";
+    if (s && inp.hlCapOn) s += ", capped at " + fmt$(Math.max(inp.hlCap, inp.hlGuaranteeOn ? inp.hlGuarantee : 0), { ascii: true });
     return s || "no pay set";
   }
   function venueDescription(inp, ascii) {
@@ -406,7 +416,8 @@
     out.push(R("Sales tax " + (inp.taxOn ? (inp.taxMode === "included" ? "(inside the price)" : "(added on top)") : "(off)"), p.tax));
     out.push(R(pn + " service fee", p.ebService, "money", "sub"));
     out.push(R(pn + " processing", p.ebProc, "money", "sub"));
-    out.push(R(pn + " fees " + (inp.ebMode === "pass" ? "paid by the buyer" : "absorbed by us"), p.ebFee));
+    out.push(R(pn + " fees " + (inp.ebMode === "pass" ? "paid by the buyer" : "absorbed by us") +
+      (p.ebCapped ? " (capped at " + fmt$(inp.ebCap, { cents: true }) + ")" : ""), p.ebFee));
     out.push(R("Buyer pays online", p.onlineBuyer, "money", "total"));
     if (inp.doorPriceOn) {
       out.push(R("Door face price", p.doorPrice));
@@ -447,7 +458,7 @@
     if (inp.hlPerTicketOn) out.push(R(fmt$(inp.hlPerTicket, C) + " per ticket" + beyond(h.perTicketThreshold), h.perTicketPart));
     if (inp.hlVersus) out.push(R("Versus: greater of guarantee or the parts above", h.dealPay, "money", "sub"));
     if (inp.hlBackendOn) out.push(R(inp.hlBackendPct + "% backend of " + fmt$(Math.max(0, r.netBeforeBackend)) + " profit", h.backend));
-    out.push(R("Headliner pay", h.pay, "money", "total"));
+    out.push(R("Headliner pay" + (h.capped ? " (capped)" : ""), h.pay, "money", "total"));
     out.push(R("Travel / hotel", h.travel, "money", "sub"));
     out.push(R("Hospitality / rider", h.hospitality, "money", "sub"));
     out.push(R("Headliner all-in", h.total, "money", "total"));
@@ -586,7 +597,8 @@
       try { obj = JSON.parse(b64Decode(raw)); }
       catch (e) { obj = JSON.parse(b64Decode(raw.slice(0, raw.lastIndexOf("=") + 1))); } // stray text pasted after the padding
       if (!obj || !obj.inputs) return null;
-      return { kind: "code", inputs: M.sanitize(obj.inputs), n: obj.n == null ? null : Math.max(0, Math.round(+obj.n) || 0) };
+      // Codes from before the fee cap open with it off.
+      return { kind: "code", inputs: M.sanitize(Object.assign({ ebCapOn: false }, obj.inputs)), n: obj.n == null ? null : Math.max(0, Math.round(+obj.n) || 0) };
     } catch (e) {
       return null;
     }
