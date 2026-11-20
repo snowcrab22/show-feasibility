@@ -615,17 +615,18 @@
     if (qm) return decodeQuery(qm[1], M);
     var f = /(?:^|[#&])f=([A-Za-z0-9_-]{10,})/.exec(t);
     if (f) return { fileId: f[1] };
-    var s = /(?:^|[#&])s=([A-Za-z0-9_-]*)/.exec(t);
+    var raw = t.replace(/\s+/g, ""); // chat apps wrap long links across lines
+    var s = /(?:^|[#&])s=([A-Za-z0-9_-]*)/.exec(raw);
+    function fromV2(o) {
+      if (!o || o.v !== 2 || !o.d || typeof o.d !== "object") return null;
+      return { kind: "link", inputs: M.sanitize(Object.assign({}, LINK_BASE, o.d)), n: Math.max(0, Math.round(+o.n) || 0) };
+    }
     try {
-      if (s) {
-        var o = JSON.parse(b64Decode(s[1]));
-        if (!o || o.v !== 2 || typeof o.d !== "object") return null;
-        return { kind: "link", inputs: M.sanitize(Object.assign({}, LINK_BASE, o.d)), n: Math.max(0, Math.round(+o.n) || 0) };
-      }
-      var raw = t.replace(/\s+/g, "");
+      if (s) return fromV2(JSON.parse(b64Decode(s[1])));
       var obj;
       try { obj = JSON.parse(b64Decode(raw)); }
       catch (e) { obj = JSON.parse(b64Decode(raw.slice(0, raw.lastIndexOf("=") + 1))); } // stray text pasted after the padding
+      if (obj && obj.v === 2) return fromV2(obj); // a share link's code pasted without the https://...#s= front
       if (!obj || !obj.inputs) return null;
       // Codes from before the fee cap open with it off.
       return { kind: "code", inputs: M.sanitize(Object.assign({ ebCapOn: false }, obj.inputs)), n: obj.n == null ? null : Math.max(0, Math.round(+obj.n) || 0) };
