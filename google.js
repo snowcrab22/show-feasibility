@@ -108,6 +108,7 @@
     if (opts.auth !== false && token) headers.Authorization = "Bearer " + token;
     return fetch(url, { method: method, headers: headers, body: opts.body }).then(function (res) {
       if (res.ok) return opts.raw ? res : res.status === 204 ? null : res.json();
+      if (res.status === 401) { token = null; tokenExp = 0; } // revoked or expired: sign in again next time
       return res.text().then(function (t) {
         var msg = "";
         try { msg = JSON.parse(t).error.message; } catch (e) { msg = t.slice(0, 200); }

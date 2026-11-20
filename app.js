@@ -504,11 +504,6 @@
       } else fallback();
     } catch (err) { fallback(); }
   }
-  // Same {v: 1, inputs, n} shape as the first version, so old and new codes load in both directions
-  // (an older page simply ignores the keys it does not know).
-  function encodeScenario() {
-    return X.encodeScenario(state.inputs, state.n, M);
-  }
   function applyScenario(obj) {
     if (!obj || typeof obj !== "object" || !obj.inputs || typeof obj.inputs !== "object") throw new Error("shape");
     state.inputs = M.sanitize(obj.inputs);
@@ -669,7 +664,7 @@
     var win = null;
     if (G.hasToken()) {
       win = window.open("", "_blank");
-      if (win) { try { win.document.title = "Creating your Google Sheet…"; win.document.body.textContent = "Creating your Google Sheet…"; } catch (e) { /* cross-origin */ } }
+      if (win) { try { win.opener = null; win.document.title = "Creating your Google Sheet…"; win.document.body.textContent = "Creating your Google Sheet…"; } catch (e) { /* cross-origin */ } }
     }
     exporting = true;
     btn.disabled = true;
