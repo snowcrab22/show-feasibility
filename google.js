@@ -22,9 +22,9 @@
   "use strict";
 
   var GOOGLE = {
-    clientId: "",      // ends in .apps.googleusercontent.com
-    apiKey: "",        // starts with AIza; restricted to this site and the Drive API
-    projectNumber: ""  // for the Google file picker (lets a teammate save over a shared scenario)
+    clientId: "77601018463-95lkqqga501lnlmordoair38100l2vs2.apps.googleusercontent.com",
+    apiKey: "AIzaSyBg1kB50ZxBx33rKvMTH99DKNlT_hEVhJA", // restricted to this site; Drive + Picker APIs
+    projectNumber: "77601018463" // for the Google file picker (lets a teammate save over a shared scenario)
   };
   var SCOPE = "https://www.googleapis.com/auth/drive.file";
   var GIS_URL = "https://accounts.google.com/gsi/client";
