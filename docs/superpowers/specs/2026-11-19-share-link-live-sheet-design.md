@@ -1,6 +1,6 @@
 # Share links, live spreadsheet (light build), Google Sheets export, cost changes
 
-Date: 2026-11-19. Status: awaiting approval.
+Date: 2026-11-19. Status: approved in conversation (labor = people x pay each for the night; saved files in Drive added).
 
 ## Intent
 
@@ -28,14 +28,15 @@ correctly. A follow-up session does the **full build** (see the end).
 
 - Editing ticket price, capacity, comps, tax, fees, online/door split or the venue cut in the sheet.
 - A live price grid or live break-even price in the sheet.
-- Charts in the sheet. Saved scenario lists in the browser.
+- Charts in the sheet.
+- Running our own server or database. Storage is the saver's Google Drive.
 
 ## Anti-goals
 
 - A sheet that shows a wrong number after an edit it invites. A cell is shaded as editable only if
   everything that depends on it is a formula.
-- Any server or storage of scenarios. Silently replacing someone's own saved scenario when they open
-  a link.
+- A server we run, or scenarios stored anywhere but the saver's own Google Drive. Silently replacing
+  someone's own working scenario when they open a link.
 
 ## Approaches considered
 
@@ -77,6 +78,19 @@ correctly. A follow-up session does the **full build** (see the end).
   ("Opened a shared scenario. Go back to mine"), then remove `#s=` from the address so a refresh keeps
   their edits. Section hashes (`#costs` etc.) keep working.
 
+### Saved scenarios (Google Drive)
+- "Save" (Google sign-in) writes a small JSON file to the saver's Drive and shares it "anyone with the
+  link can view". The page link is `…/#f=<fileId>`. Drive sharing is the access control: the owner can
+  give people edit access, or stop sharing, in Drive.
+- Opening `#f=<fileId>` loads the file with the public API key; no sign-in needed. Same undo banner as
+  share links.
+- When the open scenario came from a saved file: "Save changes" updates that file (same link) and
+  "Save as new" makes a new file. If Google refuses the update (someone else's file), the page saves a
+  copy with a new link and says so.
+- "My saved scenarios" lists files this page created in your Drive (sign-in), with open and copy link.
+- Untested this session: saving over a file another account created (needs a one-time Google file
+  pick under the `drive.file` scope). Goes to the next session with a two-account test.
+
 ### Spreadsheet (light build)
 Tabs: Summary, Inputs, Tickets & fees, Venue, Talent, Costs, By ticket count.
 
@@ -105,7 +119,8 @@ Tabs: Summary, Inputs, Tickets & fees, Venue, Talent, Costs, By ticket count.
 - Google sign-in popup on first use; the token stays in memory only. Upload the same .xlsx to Drive
   with conversion, then open the new sheet (a tab opened on the click when already signed in, or an
   "Open your sheet" link after first sign-in, to avoid popup blocking).
-- Google Cloud setup (done with the person in the browser): project, Drive API, consent screen
+- Buttons stay hidden until the client ID and API key are in the code.
+- Google Cloud setup (done by the person on their own device): project, Drive API, consent screen
   (External), Web client with origins `https://snowcrab22.github.io` and `http://localhost:8765`.
   No billing. Teammates can use the button once added as test users or once the app is published.
 
@@ -120,7 +135,7 @@ Tabs: Summary, Inputs, Tickets & fees, Venue, Talent, Costs, By ticket count.
 Cell layout, colors within the existing palette, exact wording of labels and messages.
 
 ## Full build (next session)
-Make the ticket side live (price, door price, capacity/comps with a table sized for any capacity, tax,
+Teammate overwrite of a saved file (two-account test; Google Picker grant if needed). Make the ticket side live (price, door price, capacity/comps with a table sized for any capacity, tax,
 fees, splits, venue cut), live price grid and break-even price, dropdown validation everywhere, a
 formula-built link back to the calculator, a profit chart (Sheets API after upload), and sheet
 protection for non-input cells.
