@@ -97,10 +97,22 @@ a { color: var(--accent); }
 .brand { display: grid; gap: 4px; }
 .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
 .name-fields { display: flex; flex-wrap: wrap; gap: 12px; }
+.top { position: relative; }
+.top-link { align-self: end; }
+.banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 24px;
+  background: var(--accent-wash); border-bottom: 1px solid var(--line); font-size: 14px; }
+.banner p { margin: 0; }
+.banner[hidden] { display: none; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 30; max-width: min(92vw, 520px);
+  background: var(--ink); color: var(--panel); padding: 10px 16px; border-radius: 8px; font-size: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+.toast[hidden] { display: none; }
+.toast.err { background: var(--crit-text); color: #fff; }
 .venue-field { display: grid; gap: 4px; min-width: 200px; flex: 1 1 200px; }
 .venue-field label { font-size: 12px; color: var(--ink-2); font-weight: 500; }
 .venue-field input { font: 600 17px var(--font-body); }
 @media (max-width: 600px) {
+  .top-link { position: absolute; top: 16px; right: 16px; padding: 4px 10px; font-size: 13px; }
+  .banner { padding: 10px 16px; }
   .name-fields { flex-wrap: nowrap; width: 100%; gap: 10px; }
   .venue-field { min-width: 0; flex: 1 1 0; }
   .venue-field input { font-size: 16px; }
@@ -424,6 +436,7 @@ td.neg .mdetail { color: var(--crit-text); }
       <input type="text" id="f-venueName" data-k="venueName" data-kind="text" autocomplete="off" spellcheck="false">
     </div>
   </div>
+  <button type="button" id="btn-copy-link-top" class="top-link">Copy link</button>
 </header>
 
 <div class="verdict" id="verdict" role="region" aria-label="Main levers and verdict">
@@ -460,6 +473,12 @@ td.neg .mdetail { color: var(--crit-text); }
     <li><a href="#share" data-sec="share">Share<span class="nav-num" id="nav-num-share"></span></a></li>
   </ul>
 </nav>
+
+<div class="banner" id="shared-banner" role="status" hidden>
+  <p><span id="shared-banner-text"></span> <button type="button" class="small" id="btn-undo-shared">Go back to mine</button></p>
+  <button type="button" class="small banner-close" id="btn-close-banner" aria-label="Dismiss">Dismiss</button>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <main class="shell">
   <!-- Overview -->
@@ -625,7 +644,7 @@ td.neg .mdetail { color: var(--crit-text); }
           <div class="share-grid">
             <div class="share-row">
               <button type="button" id="btn-copy-summary" class="primary">Copy summary</button>
-              <button type="button" id="btn-copy-code">Copy scenario code</button>
+              <button type="button" id="btn-copy-link">Copy link</button>
               <button type="button" id="btn-export">Export to spreadsheet</button>
             </div>
             <p class="msg" id="share-msg" role="status" aria-live="polite"></p>
@@ -636,14 +655,14 @@ td.neg .mdetail { color: var(--crit-text); }
               <textarea id="copy-fallback-text" rows="6" readonly></textarea>
             </div>
             <div class="field">
-              <label for="load-code">Load a scenario code</label>
-              <textarea id="load-code" rows="3" placeholder="Paste a scenario code from a teammate"></textarea>
+              <label for="load-code">Open a link or scenario code</label>
+              <textarea id="load-code" rows="3" placeholder="Paste a link or an older scenario code"></textarea>
             </div>
             <div class="share-row">
-              <button type="button" id="btn-load">Load scenario</button>
+              <button type="button" id="btn-load">Open</button>
               <button type="button" id="btn-reset">Reset to defaults</button>
             </div>
-            <p class="hint">The summary is plain text for Discord or a text thread. The scenario code holds every input, so whoever loads it sees the same numbers. The spreadsheet is a snapshot of every tab as an Excel file that also opens in Google Sheets and Numbers. Your last scenario is also kept in this browser.</p>
+            <p class="hint">The summary is plain text for Discord or a text thread. The link holds every input, so whoever opens it sees the same numbers; nothing is stored online. The spreadsheet is a snapshot of every tab as an Excel file that also opens in Google Sheets and Numbers. Your last scenario is also kept in this browser.</p>
           </div>
         </div>
       </div>
@@ -653,8 +672,8 @@ td.neg .mdetail { color: var(--crit-text); }
 </main>
 <div class="tip" id="tip" role="presentation"></div>
 
-<script src="model.js?v=3"></script>
-<script src="export.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="model.js?v=4"></script>
+<script src="export.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

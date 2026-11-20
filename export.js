@@ -18,6 +18,80 @@
   var SNAPSHOT_NOTE = "Numbers are a snapshot. Change inputs in the calculator and export again.";
   var MINUS = "−";
 
+  // Frozen copy of the defaults when share links were introduced (v2). Never edit: links store only
+  // the inputs that differ from this, so changing it would change what old links mean.
+  var LINK_BASE = Object.freeze({
+    venueName: "New venue",
+    showName: "",
+    capacity: 150,
+    comps: 5,
+    price: 25,
+    expectedPct: 75,
+    onlinePct: 50,
+    doorPriceOn: true,
+    doorPrice: 30,
+    doorCashPct: 30,
+    doorCardPct: 2.6,
+    doorCardFixed: 0.15,
+    taxOn: true,
+    taxRate: 10,
+    taxMode: "ontop",
+    ticketPlatform: "Eventbrite",
+    ebPreset: "eventbrite",
+    ebServicePct: 3.7,
+    ebServiceFixed: 1.79,
+    ebProcPct: 2.9,
+    ebMode: "pass",
+    doorCutOn: true,
+    doorCutPct: 15,
+    doorCutBasis: "afterTax",
+    venueRentalOn: false,
+    venueRental: 0,
+    venuePerHeadOn: false,
+    venuePerHead: 0,
+    hlPreset: "flatBonus",
+    hlGuaranteeOn: true,
+    hlGuarantee: 300,
+    hlPctOn: false,
+    hlPct: 20,
+    hlPctBasis: "faceNet",
+    hlPctStart: "first",
+    hlPctStartN: 75,
+    hlPerTicketOn: true,
+    hlPerTicket: 5,
+    hlPerTicketStart: "breakEven",
+    hlPerTicketStartN: 75,
+    hlBackendOn: false,
+    hlBackendPct: 20,
+    hlVersus: false,
+    hlTravel: 90,
+    hlHospitality: 50,
+    supportSlots: 3,
+    supportPrice: 75,
+    vjOn: false,
+    vj: 300,
+    soundTechsOn: false,
+    soundTechs: 1,
+    soundTechPay: 150,
+    stagehandsOn: false,
+    stagehands: 2,
+    stagehandPay: 100,
+    securityOn: true,
+    security: 100,
+    soundOn: false,
+    sound: 600,
+    gearOn: false,
+    gear: 50,
+    photo: 0,
+    ads: 80,
+    poster: 75,
+    insuranceOn: false,
+    insurance: 357,
+    contingencyPct: 5,
+    custom: [],
+    otherIncome: 0
+  });
+
   // ---------------------------------------------------------------- formatting (shared with app.js)
   function fmt$(v, opts) {
     opts = opts || {};
@@ -466,6 +540,50 @@
     return b64Utf8(JSON.stringify({ v: 1, inputs: M.sanitize(inputs), n: n }));
   }
 
+  // Share links: PAGE_URL#s=<base64url JSON {v:2, d: inputs that differ from LINK_BASE, n}>.
+  // Saved files: PAGE_URL#f=<Drive file id>. Old v1 codes are base64 JSON {v:1, inputs, n}.
+  function sameVal(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+  function b64urlEncode(str) { return b64Utf8(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+  function b64Decode(b64) {
+    b64 = b64.replace(/-/g, "+").replace(/_/g, "/");
+    while (b64.length % 4) b64 += "=";
+    if (!/^[A-Za-z0-9+/]+=*$/.test(b64)) throw new Error("not base64");
+    if (typeof Buffer !== "undefined" && typeof window === "undefined") return Buffer.from(b64, "base64").toString("utf8");
+    var bin = atob(b64), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  }
+  function encodeLink(inputs, n, M) {
+    var inp = M.sanitize(inputs), d = {};
+    Object.keys(inp).forEach(function (k) {
+      var base = Object.prototype.hasOwnProperty.call(LINK_BASE, k) ? LINK_BASE[k] : M.DEFAULTS[k];
+      if (!sameVal(inp[k], base)) d[k] = inp[k];
+    });
+    return PAGE_URL + "#s=" + b64urlEncode(JSON.stringify({ v: 2, d: d, n: n }));
+  }
+  function decodeShared(text, M) {
+    var t = String(text == null ? "" : text).trim();
+    if (!t) return null;
+    var f = /(?:^|[#&])f=([A-Za-z0-9_-]{10,})/.exec(t);
+    if (f) return { fileId: f[1] };
+    var s = /(?:^|[#&])s=([A-Za-z0-9_-]*)/.exec(t);
+    try {
+      if (s) {
+        var o = JSON.parse(b64Decode(s[1]));
+        if (!o || o.v !== 2 || typeof o.d !== "object") return null;
+        return { kind: "link", inputs: M.sanitize(Object.assign({}, LINK_BASE, o.d)), n: Math.max(0, Math.round(+o.n) || 0) };
+      }
+      var raw = t.replace(/\s+/g, "");
+      var obj;
+      try { obj = JSON.parse(b64Decode(raw)); }
+      catch (e) { obj = JSON.parse(b64Decode(raw.slice(0, raw.lastIndexOf("=") + 1))); } // stray text pasted after the padding
+      if (!obj || !obj.inputs) return null;
+      return { kind: "code", inputs: M.sanitize(obj.inputs), n: obj.n == null ? null : Math.max(0, Math.round(+obj.n) || 0) };
+    } catch (e) {
+      return null;
+    }
+  }
+
   // ---------------------------------------------------------------- sheet description
   var FMT = {
     money: "$#,##0.00;-$#,##0.00",
@@ -898,7 +1016,7 @@
     bundle: bundle, headlineRows: headlineRows, moneyRows: moneyRows, scenarioRows: scenarioRows, heatGrid: heatGrid, mixOklab: mixOklab, heatColor: heatColor,
     perTicketRows: perTicketRows, ticketMoneyRows: ticketMoneyRows, headlinerRows: headlinerRows, talentRows: talentRows, venueRows: venueRows,
     costCategoryRows: costCategoryRows, ledgerGroups: ledgerGroups, ledgerLineValue: ledgerLineValue, crewLabel: crewLabel,
-    encodeScenario: encodeScenario, localDate: localDate, fileName: fileName,
+    encodeScenario: encodeScenario, LINK_BASE: LINK_BASE, encodeLink: encodeLink, decodeShared: decodeShared, localDate: localDate, fileName: fileName,
     // export
     buildSheets: buildSheets, writeWorkbook: writeWorkbook
   };

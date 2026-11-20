@@ -360,7 +360,10 @@
       try { history.replaceState(null, "", "#" + name); } catch (e) { /* file:// or old browsers */ }
     }
     showSection(name, { initial: true });
-    window.addEventListener("hashchange", function () { showSection(sectionFromHash() || "overview"); });
+    window.addEventListener("hashchange", function () {
+      if (openFromHash()) return;
+      showSection(sectionFromHash() || "overview");
+    });
   }
   // The secnav sits under the verdict bar on desktop; keep its sticky offset equal to the bar's height.
   function trackVerdictHeight() {
@@ -407,7 +410,10 @@
       }
     });
     $("btn-copy-summary").addEventListener("click", function () { copyText(summaryText(), "Summary copied. Paste it in Discord or a text."); });
-    $("btn-copy-code").addEventListener("click", function () { copyText(encodeScenario(), "Scenario code copied. Whoever loads it sees this exact scenario."); });
+    $("btn-copy-link").addEventListener("click", copyLink);
+    $("btn-copy-link-top").addEventListener("click", copyLink);
+    $("btn-undo-shared").addEventListener("click", undoShared);
+    $("btn-close-banner").addEventListener("click", hideBanner);
     $("btn-load").addEventListener("click", loadFromBox);
     $("btn-export").addEventListener("click", onExport);
     var armed = null;
@@ -437,10 +443,36 @@
   }
 
   // ---------------------------------------------------------------- share
+  var toastTimer = null;
   function showMsg(text, kind) {
     var m = $("share-msg");
     m.textContent = text;
     m.className = "msg" + (kind ? " " + kind : "");
+    if (current !== "share") toast(text, kind);
+  }
+  function toast(text, kind) {
+    var t = $("toast");
+    t.textContent = text;
+    t.className = "toast" + (kind === "err" ? " err" : "");
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, 4000);
+  }
+  function touchFirst() { return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); }
+  function currentLink() { return X.encodeLink(state.inputs, state.n, M); }
+  function scenarioTitle(inp) {
+    var show = String(inp.showName || "").trim(), venue = String(inp.venueName || "").trim() || "New venue";
+    return (show ? show + " at " : "") + venue;
+  }
+  function copyLink() {
+    var url = currentLink();
+    if (touchFirst() && navigator.share) {
+      navigator.share({ title: scenarioTitle(state.inputs), url: url }).catch(function (err) {
+        if (!err || err.name !== "AbortError") copyText(url, "Link copied. Anyone who opens it sees this exact scenario.");
+      });
+      return;
+    }
+    copyText(url, "Link copied. Anyone who opens it sees this exact scenario.");
   }
   function copyText(text, okMsg) {
     var fb = $("copy-fallback"), ta = $("copy-fallback-text");
@@ -449,6 +481,7 @@
       ta.value = text;
       ta.focus();
       ta.select();
+      if (current !== "share") location.hash = "#share";
       showMsg("Your browser blocked copying. The text is selected below; copy it with Ctrl+C or Cmd+C.", "err");
     }
     try {
@@ -456,11 +489,6 @@
         navigator.clipboard.writeText(text).then(function () { fb.hidden = true; showMsg(okMsg, "ok"); }, fallback);
       } else fallback();
     } catch (err) { fallback(); }
-  }
-  function b64decodeUtf8(b64) {
-    var bin = atob(b64), bytes = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new TextDecoder().decode(bytes);
   }
   // Same {v: 1, inputs, n} shape as the first version, so old and new codes load in both directions
   // (an older page simply ignores the keys it does not know).
@@ -474,18 +502,75 @@
     var n = parseNum(obj.n);
     state.nWant = state.n = clamp(Math.round(isFinite(n) ? n : M.expectedTickets(state.inputs)), 0, S);
   }
-  function loadFromBox() {
-    var raw = $("load-code").value.replace(/\s+/g, "");
-    if (!raw) { showMsg("Paste a scenario code into the box first.", "err"); return; }
-    try {
-      applyScenario(JSON.parse(b64decodeUtf8(raw)));
-    } catch (err) {
-      showMsg("That code didn't load. Check that you copied the whole code, with nothing extra.", "err");
-      return;
-    }
+  // Opening someone else's scenario keeps yours one click away ("Go back to mine").
+  var UNDO_KEY = "kcplur-show-feasibility-undo";
+  var undoState = null;
+  function setUndo(v) {
+    undoState = v;
+    try { if (v) localStorage.setItem(UNDO_KEY, JSON.stringify(v)); else localStorage.removeItem(UNDO_KEY); } catch (e) { /* storage unavailable */ }
+  }
+  function showBanner(text) {
+    $("shared-banner-text").textContent = text;
+    $("btn-undo-shared").hidden = !undoState;
+    $("shared-banner").hidden = false;
+  }
+  // After a refresh, keep offering the way back until the visitor dismisses it.
+  function restoreUndo() {
+    try { var raw = localStorage.getItem(UNDO_KEY); if (raw) undoState = JSON.parse(raw); } catch (e) { undoState = null; }
+    if (undoState && undoState.inputs) showBanner("You're looking at a scenario someone shared: " + scenarioTitle(state.inputs) + ".");
+    else undoState = null;
+  }
+  function snapshotState() { return { inputs: JSON.parse(JSON.stringify(state.inputs)), n: state.nWant }; }
+  function openShared(obj, label) {
+    var before = snapshotState();
+    applyScenario({ inputs: obj.inputs, n: obj.n });
+    if (!undoState) setUndo(before); // first open keeps the visitor's own scenario
     syncControls();
     recompute();
-    showMsg("Scenario loaded.", "ok");
+    showBanner((label || "Opened a shared scenario") + ": " + scenarioTitle(state.inputs) + ".");
+    if (window.ShowApp && window.ShowApp.onScenarioOpened) window.ShowApp.onScenarioOpened(obj);
+  }
+  function undoShared() {
+    if (!undoState) return hideBanner();
+    applyScenario(undoState);
+    setUndo(null);
+    syncControls();
+    recompute();
+    hideBanner();
+    if (window.ShowApp && window.ShowApp.onScenarioOpened) window.ShowApp.onScenarioOpened(null);
+    toast("Back to your own scenario.", "ok");
+  }
+  function hideBanner() { $("shared-banner").hidden = true; setUndo(null); }
+  // Handles #s= (share link) and #f= (saved file) text. Returns true when it was one of those.
+  function openLinkText(h) {
+    if (!/^#?(s|f)=/.test(h || "")) return false;
+    var got = X.decodeShared(h, M);
+    if (!got) toast("That link didn't open. Check that you copied all of it.", "err");
+    else if (got.fileId) openSavedFile(got.fileId);
+    else openShared(got);
+    return true;
+  }
+  // A link pasted into the address bar while the page is open.
+  function openFromHash() {
+    var h = location.hash || "";
+    if (!openLinkText(h)) return false;
+    try { history.replaceState(null, "", location.pathname + location.search + "#" + (current || "overview")); } catch (e) { /* old browsers */ }
+    return true;
+  }
+  // Saved files need Google (google.js). Without it, say so.
+  function openSavedFile(fileId) {
+    if (window.ShowApp && window.ShowApp.openSavedFile) return window.ShowApp.openSavedFile(fileId);
+    toast("Saved scenarios aren't set up on this page yet.", "err");
+  }
+  function loadFromBox() {
+    var raw = $("load-code").value;
+    if (!raw.trim()) { showMsg("Paste a link or scenario code into the box first.", "err"); return; }
+    var got = X.decodeShared(raw, M);
+    if (!got) { showMsg("That didn't open. Check that you copied the whole link or code, with nothing extra.", "err"); return; }
+    if (got.fileId) { openSavedFile(got.fileId); return; }
+    openShared(got, got.kind === "code" ? "Opened a scenario code" : "Opened a shared scenario");
+    $("load-code").value = "";
+    showMsg("Opened.", "ok");
   }
   function save() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify({ v: 1, inputs: state.inputs, n: state.nWant })); } catch (e) { /* storage unavailable */ }
@@ -714,7 +799,7 @@
     setNav("talent", fmt$(talentTotal(r)));
     $("sum-costs").textContent = "Total costs " + fmt$(r.totalCosts) + " at " + n + " tickets; net " + fmt$(r.net, { plus: true }) + ".";
     setNav("costs", fmt$(r.totalCosts));
-    $("sum-share").textContent = "Copy a summary or scenario code, export a spreadsheet, load a code, or reset.";
+    $("sum-share").textContent = "Copy a summary or a link, export a spreadsheet, open a link, or reset.";
   }
 
   // ---------------------------------------------------------------- tiles
@@ -1076,6 +1161,8 @@
   syncControls();
   wire();
   trackVerdictHeight();
-  initSections();
+  var linkHash = /^#(s|f)=/.test(location.hash || "") ? location.hash : null;
+  initSections(); // replaces a link hash with the section name, so a refresh keeps the visitor's edits
+  if (linkHash) openLinkText(linkHash); else restoreUndo();
   recompute();
 })();
