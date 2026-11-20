@@ -148,3 +148,4 @@ protection for non-input cells.
 - The link back is a readable `#q=n=..&key=value` list of the inputs that differ from `LINK_BASE`, built by formula. `#s=`/`#f=` are unchanged. The sheet also shows the raw URL, because Excel's HYPERLINK stops at 255 characters.
 - Google only (Sheets API after upload): a warning-only lock on every tab except the yellow cells, and a profit-vs-tickets chart on its own tab. The Excel download has neither.
 - Teammate overwrite: on a 403/404, the Google Picker (`setFileIds` + `setAppId`) asks for the file, the save is tried again, and otherwise a copy is saved. This needs `projectNumber`. Not tested with two accounts.
+- Google Cloud setup this needs: Drive API, Google Sheets API (for the lock and the chart) and Google Picker API turned on. The API key must allow the Picker API, and GOOGLE.projectNumber must be set. If the lock or chart fails, the export message says so and the sheet still works.

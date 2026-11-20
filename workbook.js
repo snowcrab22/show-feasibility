@@ -370,7 +370,7 @@
       var nm = "Custom_" + (i + 1) + "_Name", am = "Custom_" + (i + 1) + "_Amount";
       return "IF(AND(" + nm + '="",' + am + '=""),"","&c' + (i + 1) + '="&' + urlEnc(nm + '&""') + '&"~"&ROUND(N(' + am + "),2))";
     });
-    linkParts.push(custParts.join("&"));
+    for (var ci2 = 0; ci2 < custParts.length; ci2 += 8) linkParts.push(custParts.slice(ci2, ci2 + 8).join("&")); // keeps each formula well under Excel's 8,192 characters
     var partNames = [];
     linkParts.forEach(function (f, i) {
       partNames.push("Link_Part_" + (i + 1));

@@ -685,14 +685,16 @@
       // Lock (warning only) and chart; the sheet still works without them.
       return G.decorateSheet(res.id, WB.decorations(sheets)).catch(function (e) {
         if (window.console) console.warn("Google Sheets lock and chart:", e);
+        res.undecorated = true;
       }).then(function () { return res; });
     }).then(function (res) {
       var box = $("export-ready");
       box.textContent = "";
       box.appendChild(el("a", { href: res.url, target: "_blank", rel: "noopener" }, ["Open your Google Sheet"]));
       box.hidden = false;
-      if (win && !win.closed) { win.location.href = res.url; exportMsg("Your Google Sheet is open in a new tab.", "ok"); }
-      else exportMsg("Your Google Sheet is ready in your Drive.", "ok");
+      var extra = res.undecorated ? " (The formula lock and the profit chart couldn't be added; the sheet still works.)" : "";
+      if (win && !win.closed) { win.location.href = res.url; exportMsg("Your Google Sheet is open in a new tab." + extra, "ok"); }
+      else exportMsg("Your Google Sheet is ready in your Drive." + extra, "ok");
     }).catch(function (e) {
       if (win && !win.closed) win.close();
       exportMsg(e && e.message === "ExcelJS failed to load" ? "Couldn't load the spreadsheet library. Check your connection and try again." : googleErrorText(e), "err");
