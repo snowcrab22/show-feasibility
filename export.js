@@ -523,9 +523,55 @@
     });
     return PAGE_URL + "#s=" + b64urlEncode(JSON.stringify({ v: 2, d: d, n: n }));
   }
+  // Readable links the spreadsheet builds with formulas: PAGE_URL#q=n=105&price=27.5&taxOn=0&c1=Fog~40.
+  // Only inputs that differ from LINK_BASE; booleans are 1/0, percents are whole numbers (29 = 29%),
+  // c<i>=name~amount are custom lines. ebPreset and hlPreset aren't sent: they're worked out again.
+  var Q_SKIP = { ebPreset: 1, hlPreset: 1, custom: 1 };
+  function qEnc(s) {
+    return String(s).replace(/%/g, "%25").replace(/&/g, "%26").replace(/#/g, "%23").replace(/=/g, "%3D")
+      .replace(/~/g, "%7E").replace(/ /g, "%20").replace(/\+/g, "%2B").replace(/"/g, "%22");
+  }
+  function qNum(v, d) { var m = Math.pow(10, d); return String(Math.round(v * m) / m); }
+  function encodeQueryLink(inputs, n, M) {
+    var inp = M.sanitize(inputs), out = "n=" + n;
+    Object.keys(M.DEFAULTS).forEach(function (k) {
+      if (Q_SKIP[k] || sameVal(inp[k], LINK_BASE[k])) return;
+      var v = inp[k];
+      if (typeof v === "boolean") v = v ? "1" : "0";
+      else if (typeof v === "number") v = /Pct$|Rate$/.test(k) || k === "hlPct" ? qNum(v, 6) : qNum(v, 2);
+      else v = qEnc(v);
+      out += "&" + k + "=" + v;
+    });
+    inp.custom.forEach(function (c, i) { out += "&c" + (i + 1) + "=" + qEnc(c.name) + "~" + qNum(c.amount, 2); });
+    return PAGE_URL + "#q=" + out;
+  }
+  function decodeQuery(q, M) {
+    var obj = {}, custom = [], n = 0;
+    q.split("&").forEach(function (part) {
+      var i = part.indexOf("=");
+      if (i < 1) return;
+      var k = part.slice(0, i), v = part.slice(i + 1);
+      try { v = decodeURIComponent(v); } catch (e) { /* keep as typed */ }
+      var cm = /^c(\d+)$/.exec(k);
+      if (k === "n") n = Math.max(0, Math.round(+v) || 0);
+      else if (cm) { var t = v.lastIndexOf("~"); custom.push({ i: +cm[1], name: t < 0 ? v : v.slice(0, t), amount: t < 0 ? 0 : parseFloat(v.slice(t + 1)) || 0 }); }
+      else if (Object.prototype.hasOwnProperty.call(M.DEFAULTS, k) && !Q_SKIP[k]) {
+        var d = M.DEFAULTS[k];
+        obj[k] = typeof d === "boolean" ? v === "1" || v === "true" : typeof d === "number" ? parseFloat(v) : v;
+      }
+    });
+    custom.sort(function (a, b) { return a.i - b.i; });
+    var raw = Object.assign({}, LINK_BASE, obj, { custom: custom.map(function (c) { return { name: c.name, amount: c.amount }; }) });
+    delete raw.ebPreset; // sanitize works it out from the three rates
+    var inp = M.sanitize(raw);
+    inp.hlPreset = M.detectPreset(inp);
+    return { kind: "link", inputs: inp, n: n };
+  }
   function decodeShared(text, M) {
     var t = String(text == null ? "" : text).trim();
     if (!t) return null;
+    var qm = /(?:^|#)q=(.*)$/.exec(t);
+    if (qm) return decodeQuery(qm[1], M);
     var f = /(?:^|[#&])f=([A-Za-z0-9_-]{10,})/.exec(t);
     if (f) return { fileId: f[1] };
     var s = /(?:^|[#&])s=([A-Za-z0-9_-]*)/.exec(t);
@@ -582,6 +628,6 @@
     bundle: bundle, headlineRows: headlineRows, moneyRows: moneyRows, scenarioRows: scenarioRows, heatGrid: heatGrid, mixOklab: mixOklab, heatColor: heatColor,
     perTicketRows: perTicketRows, ticketMoneyRows: ticketMoneyRows, headlinerRows: headlinerRows, talentRows: talentRows, venueRows: venueRows,
     costCategoryRows: costCategoryRows,
-    encodeScenario: encodeScenario, LINK_BASE: LINK_BASE, encodeLink: encodeLink, decodeShared: decodeShared, localDate: localDate, fileName: fileName
+    encodeScenario: encodeScenario, LINK_BASE: LINK_BASE, encodeLink: encodeLink, encodeQueryLink: encodeQueryLink, decodeShared: decodeShared, localDate: localDate, fileName: fileName
   };
 });

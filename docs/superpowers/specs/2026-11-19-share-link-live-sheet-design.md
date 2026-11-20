@@ -139,3 +139,12 @@ Teammate overwrite of a saved file (two-account test; Google Picker grant if nee
 fees, splits, venue cut), live price grid and break-even price, dropdown validation everywhere, a
 formula-built link back to the calculator, a profit chart (Sheets API after upload), and sheet
 protection for non-input cells.
+
+### Full build: done (2026-11-19)
+- Every input on Inputs is yellow and editable, with dropdowns for every choice. Every number is a formula.
+- The "By ticket count" table has rows up to max(1,000, 2 × capacity at export) tickets. Rows past Sellable are blank. Capacity and Tickets sold are validated up to that size.
+- Per-ticket constants (`PT_*` on "Tickets & fees") mirror `ticketSide()`. Splits use `ROUND(ROUND(x,9),0)`.
+- A "Price math" tab repeats the ticket side at each grid price, at $0, at $1,000 and for 17 bisection steps. That matches `heatGrid` and `breakEvenPrice` to the cent. The model's final walk-down never moves (the cent below is one the search already saw lose), so the sheet has no walk-down step. The heat colors are a conditional color scale.
+- The link back is a readable `#q=n=..&key=value` list of the inputs that differ from `LINK_BASE`, built by formula. `#s=`/`#f=` are unchanged. The sheet also shows the raw URL, because Excel's HYPERLINK stops at 255 characters.
+- Google only (Sheets API after upload): a warning-only lock on every tab except the yellow cells, and a profit-vs-tickets chart on its own tab. The Excel download has neither.
+- Teammate overwrite: on a 403/404, the Google Picker (`setFileIds` + `setAppId`) asks for the file, the save is tried again, and otherwise a copy is saved. This needs `projectNumber`. Not tested with two accounts.

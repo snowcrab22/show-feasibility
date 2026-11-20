@@ -550,9 +550,9 @@
     toast("Back to your own scenario.", "ok");
   }
   function hideBanner() { $("shared-banner").hidden = true; setUndo(null); }
-  // Handles #s= (share link) and #f= (saved file) text. Returns true when it was one of those.
+  // Handles #s= (share link), #q= (readable link from the spreadsheet) and #f= (saved file) text. Returns true when it was one of those.
   function openLinkText(h) {
-    if (!/^#?(s|f)=/.test(h || "")) return false;
+    if (!/^#?(s|f|q)=/.test(h || "")) return false;
     var got = X.decodeShared(h, M);
     if (!got) toast("That link didn't open. Check that you copied all of it.", "err");
     else if (got.fileId) openSavedFile(got.fileId);
@@ -672,13 +672,20 @@
     $("export-ready").hidden = true;
     exportMsg(G.hasToken() ? "Creating your Google Sheet…" : "Sign in to Google in the window that opens…", "");
     function release() { exporting = false; btn.disabled = false; btn.removeAttribute("aria-busy"); }
+    var sheets = null;
     G.ensureToken().then(function () {
       exportMsg("Creating your Google Sheet…", "");
       return loadExcel();
     }).then(function (ExcelJS) {
-      return WB.writeWorkbook(ExcelJS, WB.buildSheets(inputs, n, M, { date: date })).xlsx.writeBuffer();
+      sheets = WB.buildSheets(inputs, n, M, { date: date });
+      return WB.writeWorkbook(ExcelJS, sheets).xlsx.writeBuffer();
     }).then(function (buf) {
       return G.uploadAsSheet(new Blob([buf], { type: XLSX_MIME }), name);
+    }).then(function (res) {
+      // Lock (warning only) and chart; the sheet still works without them.
+      return G.decorateSheet(res.id, WB.decorations(sheets)).catch(function (e) {
+        if (window.console) console.warn("Google Sheets lock and chart:", e);
+      }).then(function () { return res; });
     }).then(function (res) {
       var box = $("export-ready");
       box.textContent = "";
@@ -1293,7 +1300,7 @@
   wire();
   trackVerdictHeight();
   initGoogleUI();
-  var linkHash = /^#(s|f)=/.test(location.hash || "") ? location.hash : null;
+  var linkHash = /^#(s|f|q)=/.test(location.hash || "") ? location.hash : null;
   initSections(); // replaces a link hash with the section name, so a refresh keeps the visitor's edits
   if (linkHash) openLinkText(linkHash); else restoreUndo();
   recompute();

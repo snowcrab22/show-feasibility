@@ -24,10 +24,12 @@
   var GOOGLE = {
     clientId: "",      // ends in .apps.googleusercontent.com
     apiKey: "",        // starts with AIza; restricted to this site and the Drive API
-    projectNumber: ""  // for a future Google file picker
+    projectNumber: ""  // for the Google file picker (lets a teammate save over a shared scenario)
   };
   var SCOPE = "https://www.googleapis.com/auth/drive.file";
   var GIS_URL = "https://accounts.google.com/gsi/client";
+  var GAPI_URL = "https://apis.google.com/js/api.js";
+  var SHEETS = "https://sheets.googleapis.com/v4/spreadsheets";
   var DRIVE = "https://www.googleapis.com/drive/v3/files";
   var UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
   var XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -52,6 +54,41 @@
         "--" + boundary + "\r\nContent-Type: " + contentType + "\r\n\r\n",
       tail: "\r\n--" + boundary + "--"
     };
+  }
+  // Sheets API requests that finish an uploaded workbook: a warning-only lock on every tab except
+  // the yellow input cells, and a profit-vs-tickets chart on its own tab.
+  // deco comes from ShowWorkbook.decorations(sheets); sheetIds maps tab title -> sheetId.
+  function sheetsRequests(deco, sheetIds) {
+    var reqs = [];
+    deco.sheets.forEach(function (title) {
+      if (sheetIds[title] == null) return;
+      var id = sheetIds[title];
+      var open = deco.inputs.filter(function (r) { return r.sheet === title; }).map(function (r) {
+        return { sheetId: id, startRowIndex: r.r1, endRowIndex: r.r2, startColumnIndex: r.c1, endColumnIndex: r.c2 };
+      });
+      var pr = { range: { sheetId: id }, warningOnly: true, description: "Formulas. Change the yellow cells on Inputs; everything else recalculates." };
+      if (open.length) pr.unprotectedRanges = open;
+      reqs.push({ addProtectedRange: { protectedRange: pr } });
+    });
+    var c = deco.chart;
+    if (c && sheetIds[c.sheet] != null) {
+      var src = function (col) {
+        return { sourceRange: { sources: [{ sheetId: sheetIds[c.sheet], startRowIndex: c.headerRow, endRowIndex: c.lastRow, startColumnIndex: col, endColumnIndex: col + 1 }] } };
+      };
+      reqs.push({ addChart: { chart: {
+        spec: {
+          title: "Profit by tickets sold",
+          basicChart: {
+            chartType: "LINE", legendPosition: "NO_LEGEND", headerCount: 1,
+            axis: [{ position: "BOTTOM_AXIS", title: "Tickets sold" }, { position: "LEFT_AXIS", title: "Net (profit or loss)" }],
+            domains: [{ domain: src(c.nCol) }],
+            series: [{ series: src(c.netCol), targetAxis: "LEFT_AXIS" }]
+          }
+        },
+        position: { newSheet: true }
+      } } });
+    }
+    return reqs;
   }
   function fileLink(id) { return X.PAGE_URL + "#f=" + id; }
   function driveName(name) { return (String(name || "").trim() || "Untitled scenario") + " (Show Feasibility).json"; }
@@ -131,7 +168,56 @@
     });
   }
 
-  // Save a scenario. With fileId, update that file (same link); if Google refuses, save a copy.
+  // Add the lock and the chart to an uploaded Google Sheet. Needs the Sheets API turned on in the
+  // Google Cloud project; drive.file covers files this page created.
+  function decorateSheet(spreadsheetId, deco) {
+    var base = SHEETS + "/" + encodeURIComponent(spreadsheetId);
+    return api("GET", base + "?fields=sheets.properties(sheetId,title)").then(function (r) {
+      var ids = {};
+      (r.sheets || []).forEach(function (sh) { ids[sh.properties.title] = sh.properties.sheetId; });
+      var reqs = sheetsRequests(deco, ids);
+      if (!reqs.length) return null;
+      return api("POST", base + ":batchUpdate", { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requests: reqs }) });
+    });
+  }
+
+  // drive.file only lets this page write files it created, or files the person has opened with this
+  // app through the Google file picker. When saving over a teammate's scenario is refused, show the
+  // picker with just that file; picking it grants access, then the save is tried once more.
+  // Needs GOOGLE.projectNumber. Resolves true when the file was picked.
+  var gapiPromise = null;
+  function loadPicker() {
+    if (window.google && window.google.picker) return Promise.resolve();
+    if (!gapiPromise) gapiPromise = new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = GAPI_URL; s.async = true;
+      s.onload = function () { window.gapi.load("picker", { callback: resolve, onerror: reject }); };
+      s.onerror = function () { gapiPromise = null; s.remove(); reject(new Error("Google file picker didn't load")); };
+      document.head.appendChild(s);
+    });
+    return gapiPromise;
+  }
+  function pickerGrant(fileId) {
+    if (typeof window === "undefined" || !GOOGLE.projectNumber || !token) return Promise.resolve(false);
+    return loadPicker().then(function () {
+      return new Promise(function (resolve) {
+        var P = window.google.picker;
+        var view = new P.DocsView(P.ViewId.DOCS).setFileIds(fileId).setMode(P.DocsViewMode.LIST);
+        new P.PickerBuilder()
+          .setAppId(GOOGLE.projectNumber).setOAuthToken(token).setDeveloperKey(GOOGLE.apiKey)
+          .addView(view).setTitle("Select the scenario to save over it")
+          .setCallback(function (data) {
+            var a = data[P.Response.ACTION];
+            if (a === P.Action.PICKED) resolve((data[P.Response.DOCUMENTS] || []).some(function (d) { return d[P.Document.ID] === fileId; }));
+            else if (a === P.Action.CANCEL) resolve(false);
+          })
+          .build().setVisible(true);
+      });
+    }).catch(function () { return false; });
+  }
+
+  // Save a scenario. With fileId, update that file (same link). If Google refuses, offer the file
+  // picker grant (when a project number is set) and try again; failing that, save a copy.
   // Returns { id, link, copied }.
   function saveScenario(payload, fileId) {
     var body = JSON.stringify(payload);
@@ -144,12 +230,19 @@
       });
     }
     if (!fileId) return create().then(function (id) { return { id: id, link: fileLink(id), copied: false }; });
-    return multipart("PATCH", UPLOAD + "/" + encodeURIComponent(fileId) + "?uploadType=multipart&fields=id", { name: driveName(payload.name) }, body, "application/json")
-      .then(function () { return { id: fileId, link: fileLink(fileId), copied: false }; })
-      .catch(function (e) {
-        if (e.status === 403 || e.status === 404) return create().then(function (id) { return { id: id, link: fileLink(id), copied: true }; });
-        throw e;
+    function patch() {
+      return multipart("PATCH", UPLOAD + "/" + encodeURIComponent(fileId) + "?uploadType=multipart&fields=id", { name: driveName(payload.name) }, body, "application/json")
+        .then(function () { return { id: fileId, link: fileLink(fileId), copied: false }; });
+    }
+    function copy() { return create().then(function (id) { return { id: id, link: fileLink(id), copied: true }; }); }
+    function refused(e) { return e && (e.status === 403 || e.status === 404); }
+    return patch().catch(function (e) {
+      if (!refused(e)) throw e;
+      return pickerGrant(fileId).then(function (picked) {
+        if (!picked) return copy();
+        return patch().catch(function (e2) { if (refused(e2)) return copy(); throw e2; });
       });
+    });
   }
 
   // Open a saved scenario: public read with the API key; falls back to the signed-in token for files
@@ -175,7 +268,7 @@
 
   return {
     GOOGLE: GOOGLE,
-    configured: configured, buildPayload: buildPayload, parsePayload: parsePayload, multipartParts: multipartParts,
+    configured: configured, buildPayload: buildPayload, sheetsRequests: sheetsRequests, decorateSheet: decorateSheet, parsePayload: parsePayload, multipartParts: multipartParts,
     fileLink: fileLink, driveName: driveName,
     preload: preload, hasToken: hasToken, ensureToken: ensureToken,
     uploadAsSheet: uploadAsSheet, saveScenario: saveScenario, loadScenario: loadScenario, listSaved: listSaved

@@ -1,17 +1,23 @@
-/* Show Feasibility: the live spreadsheet export (light build).
+/* Show Feasibility: the live spreadsheet export (full build).
  * Works in the browser (window.ShowWorkbook) and in Node (module.exports). Needs export.js (ShowExport).
  *
  *   buildSheets(inputs, n, Model, opts) -> [{ name, columns, rows, ranges, cf, freeze, freezeCols, tab }]
  *   writeWorkbook(ExcelJS, sheets)      -> ExcelJS workbook
+ *   decorations(sheets)                 -> { inputs: [{ sheet, r1, c1, r2, c2 }], chart: {...} } for the Sheets API
  *
- * Live chain: yellow cells on Inputs -> named amounts on Costs and Talent -> "By ticket count"
- * (one row per ticket count; ticket-side columns are values from the calculator, cost-side columns
- * are formulas) -> every "at the chosen count" number via INDEX(column, ChosenN + 1).
- * A cell is yellow only when everything downstream of it is a formula. Ticket-side inputs (price,
- * tax, fees, online/door split, venue % and per-head, capacity) are gray: change them in the calculator.
+ * The workbook is a full calculator. Every input on the Inputs tab is a yellow cell, every number is a
+ * formula, and the chain mirrors model.js:
+ *   Inputs -> per-ticket constants (Tickets & fees, named PT_*) -> "By ticket count" (one row per ticket
+ *   count up to MaxRows; rows past Sellable are blank and excluded) -> every "at the chosen count" number
+ *   via INDEX(column, ChosenN + 1).
+ *   The price grid and the break-even price need the headliner break-even at other prices, so the
+ *   "Price math" tab repeats the ticket side once per price: one column per grid price, one for $0, one
+ *   for $1,000 and 17 for the cent-by-cent bisection (the same steps breakEvenPrice takes).
+ * Whole-ticket splits use ROUND(ROUND(x,9),0): 50 x 0.29 is 14.499999999999998 in floating point while
+ * the model's 50 x 29 / 100 is exactly 14.5.
  *
  * Cell: { v, t: 'money'|'int'|'pct'|'text'|'link'|'auto', s: style, f: formula without '=', name,
- *         dv: data validation, fmt, bold, color, fill, align, wrap, span, indent, box }
+ *         dv: data validation, fmt, bold, color, fill, align, wrap, span, indent, box, link }
  * Every formula cell carries v, its value computed by the model, so viewers that don't recalculate
  * still show numbers.
  */
@@ -28,11 +34,15 @@
   var ON = "On", OFF = "Off", YES = "Yes", NO = "No";
   var START_LABEL = { first: "From ticket 1", breakEven: "After break-even", afterN: "After N tickets" };
   var BASIS_LABEL = { grossFace: "Gross face", faceNet: "Face net of sales tax", net: "Our net ticket revenue" };
+  var TAX_LABEL = { ontop: "Added on top", included: "Included in price" };
+  var FEE_LABEL = { pass: "Passed to buyer", absorb: "Absorbed by us" };
+  var CUT_LABEL = X.CUT_SHORT; // afterTax, afterTaxFees, gross
   var NEVER = 1000000000; // threshold stand-in for "never reached"
   var EPS = "0.000000001";
-  var SNAP_NOTE = "Gray numbers are from the calculator at export. Change those in the calculator and export again.";
+  var PRICE_CAP_CENTS = 100000, BISECT_STEPS = 17; // same search as model.breakEvenPrice ($1,000 ceiling)
   var EDIT_NOTE = "Yellow cells on the Inputs tab can be changed here; everything else recalculates.";
   var BLANK_CUSTOM_ROWS = 5;
+  var PM = "Price math";
 
   // ---------------------------------------------------------------- tiny builders
   function colLetter(c) { var s = ""; while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; }
@@ -41,7 +51,7 @@
     this.name = name; this.columns = columns; this.rows = []; this.ranges = []; this.cf = []; this.freeze = 0; this.freezeCols = 0; this.tab = tab;
   }
   Sheet.prototype.add = function (cells) { this.rows.push(cells || []); return this.rows.length; };
-  Sheet.prototype.abs = function (col, row) { return quoteSheet(this.name) + "!$" + colLetter(col) + "$" + row; };
+  Sheet.prototype.next = function () { return this.rows.length + 1; };
   Sheet.prototype.range = function (name, col, r1, r2) {
     this.ranges.push({ name: name, ref: quoteSheet(this.name) + "!$" + colLetter(col) + "$" + r1 + ":$" + colLetter(col) + "$" + r2 });
   };
@@ -54,8 +64,8 @@
   }
   function txt(v, s, extra) { return cell(v, "text", s, extra); }
   function fx(f, v, t, s, extra) { var c = cell(v, t, s, extra); c.f = f; return c; }
-  function snap(v, t, extra) { return cell(v, t, "snap", extra); }
   function choice(list) { return { type: "list", list: list }; }
+  function str(s) { return '"' + String(s).replace(/"/g, '""') + '"'; }
 
   function onOff(b) { return b ? ON : OFF; }
   function idx(col) { return "INDEX(" + col + ",ChosenN+1)"; }
@@ -65,15 +75,108 @@
     if (start === "afterN") return Math.max(0, startN);
     return hlBE === null ? NEVER : hlBE;
   }
+  function startF(startName, nName, hlBERef) {
+    return "IF(" + startName + "=" + str(START_LABEL.first) + ",0,IF(" + startName + "=" + str(START_LABEL.afterN) + ",MAX(0," + nName + "),IF(ISNUMBER(" + hlBERef + ")," + hlBERef + "," + NEVER + ")))";
+  }
+  // "$1,234" / "$1,234.50" without TEXT thousands formats (not every engine has them).
+  function moneyText(e, cents) {
+    var I = cents ? "INT(ROUND(" + e + ",2))" : "ROUND(" + e + ",0)";
+    var grp = "IF(" + I + ">=1000000,INT(" + I + "/1000000)&\",\"&TEXT(MOD(INT(" + I + "/1000),1000),\"000\")&\",\"&TEXT(MOD(" + I + ",1000),\"000\")," +
+      "IF(" + I + ">=1000,INT(" + I + "/1000)&\",\"&TEXT(MOD(" + I + ",1000),\"000\")," + I + "&\"\"))";
+    return "\"$\"&" + grp + (cents ? "&RIGHT(TEXT(ROUND(" + e + ",2),\"0.00\"),3)" : "");
+  }
+  function moneyTextAuto(e) { return "IF(MOD(ROUND(" + e + ",2),1)<>0," + moneyText(e, true) + "," + moneyText(e, false) + ")"; }
+  function urlEnc(e) {
+    var s = e;
+    [["%", "%25"], ["&", "%26"], ["#", "%23"], ["=", "%3D"], ["~", "%7E"], [" ", "%20"], ["+", "%2B"], ['"', "%22"]].forEach(function (p) {
+      s = "SUBSTITUTE(" + s + "," + (p[0] === '"' ? "CHAR(34)" : str(p[0])) + "," + str(p[1]) + ")";
+    });
+    return s;
+  }
+  function enumF(name, labels) { // sheet label -> model key
+    var keys = Object.keys(labels), f = str(keys[keys.length - 1]);
+    for (var i = keys.length - 2; i >= 0; i--) f = "IF(" + name + "=" + str(labels[keys[i]]) + "," + str(keys[i]) + "," + f + ")";
+    return f;
+  }
 
-  function topBlock(sh, title, ctx) {
+  // Per-ticket constants for an online price P and door price DP, mirroring model.ticketSide().
+  // R(key) gives the reference to an earlier constant.
+  var PT_KEYS = ["fn", "tx", "gr", "svc", "buyer", "proc", "fee", "abs", "pass", "dfn", "dtx", "dgr", "dcp"];
+  function ptFormulas(P, DP, R) {
+    var INC = "TaxMode=" + str(TAX_LABEL.included);
+    return {
+      fn: "IF(" + INC + "," + P + "/(1+TaxR)," + P + ")",
+      tx: "IF(" + INC + "," + P + "-" + R("fn") + "," + P + "*TaxR)",
+      gr: P + "+IF(" + INC + ",0," + R("tx") + ")",
+      svc: "SvcPct*" + P + "+SvcFixed",
+      buyer: "IF(FeeMode=" + str(FEE_LABEL.pass) + ",(" + R("gr") + "+" + R("svc") + ")/(1-ProcPct)," + R("gr") + ")",
+      proc: R("buyer") + "*ProcPct",
+      fee: R("svc") + "+" + R("proc"),
+      abs: "IF(FeeMode=" + str(FEE_LABEL.absorb) + "," + R("fee") + ",0)",
+      pass: "IF(FeeMode=" + str(FEE_LABEL.pass) + "," + R("fee") + ",0)",
+      dfn: "IF(" + INC + "," + DP + "/(1+TaxR)," + DP + ")",
+      dtx: "IF(" + INC + "," + DP + "-" + R("dfn") + "," + DP + "*TaxR)",
+      dgr: DP + "+IF(" + INC + ",0," + R("dtx") + ")",
+      dcp: "DoorCardPct*" + R("dgr") + "+DoorCardFixed"
+    };
+  }
+  function ptValues(pt) { // model perTicketPrices -> PT_KEYS values
+    return { fn: pt.faceNet, tx: pt.tax, gr: pt.gross, svc: pt.ebService, buyer: pt.onlineBuyer, proc: pt.ebProc, fee: pt.ebFee,
+      abs: pt.ebAbsorbed, pass: pt.ebPassed, dfn: pt.doorFaceNet, dtx: pt.doorTax, dgr: pt.doorGross, dcp: pt.doorCardProc };
+  }
+  // Ticket side at a count N (a reference), given the per-ticket constant references K(key), P and DP.
+  // R(key) refers to earlier rows of the same block. Mirrors ticketSide(): counts, then money.
+  function tsFormulas(N, P, DP, K, R) {
+    return {
+      on: "ROUND(ROUND(" + N + "*OnlinePct,9),0)",
+      door: N + "-" + R("on"),
+      card: R("door") + "-ROUND(ROUND(" + R("door") + "*DoorCashPct,9),0)",
+      fnT: R("on") + "*" + K("fn") + "+" + R("door") + "*" + K("dfn"),
+      gf: R("on") + "*" + P + "+" + R("door") + "*" + DP,
+      absT: R("on") + "*" + K("abs"),
+      dpT: R("card") + "*" + K("dcp"),
+      cb: "IF(DoorCutBasis=" + str(CUT_LABEL.afterTax) + "," + R("fnT") + ",IF(DoorCutBasis=" + str(CUT_LABEL.afterTaxFees) + "," +
+        R("fnT") + "-" + R("absT") + "-" + R("dpT") + "," + R("on") + "*" + K("gr") + "+" + R("door") + "*" + K("dgr") + "))",
+      cut: "IF(DoorCutOn=\"On\",MAX(0," + R("cb") + ")*DoorCutPct,0)",
+      ph: "IF(PerHeadOn=\"On\",(" + N + "+CompsEff)*PerHead,0)",
+      ntr: R("fnT") + "-" + R("absT") + "-" + R("dpT") + "-" + R("cut") + "-" + R("ph"),
+      hb: "IF(HLPctBasis=" + str(BASIS_LABEL.grossFace) + "," + R("gf") + ",IF(HLPctBasis=" + str(BASIS_LABEL.net) + "," + R("ntr") + "," + R("fnT") + "))"
+    };
+  }
+  var TS_KEYS = ["on", "door", "card", "fnT", "gf", "absT", "dpT", "cb", "cut", "ph", "ntr", "hb"];
+  var TS_LABEL = { on: "Online tickets", door: "Door tickets", card: "Door card tickets", fnT: "Face net of tax", gf: "Gross face", absT: "Fees we absorb",
+    dpT: "Door card processing", cb: "Venue % basis", cut: "Venue % of door", ph: "Per-head fee", ntr: "Net ticket revenue", hb: "Headliner % basis" };
+  function tsValues(r, inp) {
+    return { on: r.counts.online, door: r.counts.door, card: r.counts.doorCard, fnT: r.faceNet, gf: r.grossFace, absT: r.eventbrite.absorbed,
+      dpT: r.doorProc, cb: r.doorCutBasis, cut: r.doorCut, ph: r.venue.perHead, ntr: r.netTicketRevenue, hb: basisValue(r, inp.hlPctBasis) };
+  }
+  // Headliner and profit at count N from a ticket-side block, mirroring computeCore().
+  var DEAL_KEYS = ["pct", "pt", "deal", "nbb", "backend", "net", "ok"];
+  var DEAL_LABEL = { pct: "% part", pt: "$ per ticket part", deal: "Deal pay", nbb: "Net before backend", backend: "Backend", net: "Net", ok: "Breaks even (1)" };
+  function dealFormulas(N, R, pctThr, ptThr, hbThr) {
+    return {
+      pct: "IF(AND(HLPctOn=\"On\"," + N + ">" + pctThr + "),MAX(0," + R("hb") + "-" + hbThr + ")*HLPct,0)",
+      pt: "IF(HLPerTicketOn=\"On\",MAX(0," + N + "-" + ptThr + ")*HLPerTicket,0)",
+      deal: "IF(HLVersus=\"Yes\",MAX(GuaranteeAmt," + R("pct") + "+" + R("pt") + "),GuaranteeAmt+" + R("pct") + "+" + R("pt") + ")",
+      nbb: R("ntr") + "+OtherIncome-FixedTotal-(" + R("deal") + "-GuaranteeAmt)",
+      backend: "IF(HLBackendOn=\"On\",MAX(0," + R("nbb") + ")*HLBackendPct,0)",
+      net: R("nbb") + "-" + R("backend"),
+      ok: "IF(" + R("net") + ">=-" + EPS + ",1,0)"
+    };
+  }
+  function dealValues(r) {
+    var h = r.headliner;
+    return { pct: h.pctPart, pt: h.perTicketPart, deal: h.dealPay, nbb: r.netBeforeBackend, backend: h.backend, net: r.net, ok: r.net >= -1e-9 ? 1 : 0 };
+  }
+
+  function topBlock(sh, title, ctx, titleCell) {
     sh.add([null, txt(title, "title")]);
-    sh.add([null, txt(ctx.title, "label", { bold: true })]);
-    sh.add([null, txt("Exported " + ctx.date + " at " + ctx.r.n + " tickets, " + X.priceText(ctx.inp.price) + " a ticket" +
-      (ctx.inp.doorPriceOn ? " (" + X.priceText(ctx.inp.doorPrice) + " at the door)" : "") + ". " + EDIT_NOTE, "muted", { span: 6 })]);
-    sh.add([null, cell(ctx.link, "link", "muted", { text: "Open this scenario in the calculator" })]);
+    sh.add([null, titleCell || fx("ScenarioTitle", ctx.title, "text", "label", { bold: true })]);
+    sh.add([null, txt("Exported " + ctx.date + ". " + EDIT_NOTE, "muted", { span: 6 })]);
+    sh.add([null, linkCell()]);
     sh.add([]);
   }
+  function linkCell() { return fx('HYPERLINK(CalcLink,"Open this scenario in the calculator")', "Open this scenario in the calculator", "text", "muted", { link: true }); }
   function heading(sh, text, span) { sh.add([null, txt(text, "heading", { span: span || 3 })]); }
 
   // ---------------------------------------------------------------- the workbook
@@ -81,6 +184,7 @@
     opts = opts || {};
     var inp = M.sanitize(inputs);
     var S = M.sellable(inp);
+    var MAXR = Math.max(1000, Math.ceil(inp.capacity * 2 / 100) * 100); // table rows: 0..MAXR tickets
     n = Math.max(0, Math.min(S, Math.round(+n) || 0));
     var hlBE = M.headlinerBreakEven(inp);
     var rs = [];
@@ -91,7 +195,7 @@
       inp: inp, r: r,
       date: opts.date ? (typeof opts.date === "string" ? opts.date : X.localDate(opts.date)) : X.localDate(),
       title: (String(inp.showName || "").trim() ? String(inp.showName).trim() + " at " : "") + (String(inp.venueName || "").trim() || "New venue"),
-      link: X.encodeLink(inp, n, M)
+      link: X.encodeQueryLink(inp, n, M)
     };
     var pn = X.platLabel(inp);
     var pctThr = threshold(inp.hlPctStart, inp.hlPctStartN, hlBE);
@@ -101,58 +205,75 @@
     var talentTotal = h.total + L.support + L.vj;
     var laborAmt = L.soundTechs + L.stagehands;
     var inflow = r.inflow;
+    var pt = ptValues(r.perTicketPrices);
+    var PLAT = 'IF(TRIM(Platform)="","Ticketing platform",TRIM(Platform))';
+    function platF(before, after) { return (before ? str(before) + "&" : "") + PLAT + (after ? "&" + str(after) : ""); }
 
     var sheets = {};
 
     // ---------- Inputs
     var I = new Sheet("Inputs", [2, 50, 18, 10, 52], LIGHT.input);
     sheets.inputs = I;
-    topBlock(I, "Inputs", ctx);
+    topBlock(I, "Inputs", ctx, fx('IF(TRIM(ShowName)<>"",TRIM(ShowName)&" at ","")&IF(TRIM(VenueName)<>"",TRIM(VenueName),"New venue")', ctx.title, "text", "label", { bold: true, name: "ScenarioTitle" }));
     function inRow(label, valueCell, toggleCell, note) {
-      return I.add([null, txt(label, "label"), valueCell, toggleCell || null, note ? txt(note, "muted") : null]);
+      return I.add([null, typeof label === "string" ? txt(label, "label") : label, valueCell, toggleCell || null, note ? (typeof note === "string" ? txt(note, "muted") : note) : null]);
     }
     function yMoney(v, name) { return cell(v, "money", "input", { name: name, dv: { type: "min0" } }); }
-    function yInt(v, name) { return cell(v, "int", "input", { name: name, dv: { type: "int0" } }); }
-    function yPct(v, name) { return cell(v / 100, "pct", "input", { name: name, fmt: FMT.pctIn, dv: { type: "pct" } }); }
+    function yInt(v, name, dv) { return cell(v, "int", "input", { name: name, dv: dv || { type: "int0" } }); }
+    function yPct(v, name, max) { return cell(v / 100, "pct", "input", { name: name, fmt: FMT.pctIn, dv: { type: "pct", max: max } }); }
     function yOn(b, name) { return cell(onOff(b), "text", "input", { name: name, dv: choice([ON, OFF]), align: "center" }); }
     function yChoice(v, name, list) { return cell(v, "text", "input", { name: name, dv: choice(list) }); }
-    function gOn(b) { return snap(onOff(b), "text", { align: "center" }); }
+    function yText(v, name) { return cell(v, "text", "input", { name: name }); }
+    function vals(o) { return Object.keys(o).map(function (k) { return o[k]; }); }
 
-    heading(I, "This snapshot", 4);
-    inRow("Tickets sold", cell(n, "int", "input", { name: "TicketsSold", dv: { type: "range", min: 0, max: S } }), null, "0 to " + S + " (sellable tickets).");
+    heading(I, "Show", 4);
+    inRow("Venue name", yText(inp.venueName, "VenueName"));
+    inRow("Show name", yText(inp.showName, "ShowName"));
+    inRow("Tickets sold", yInt(n, "TicketsSold", { type: "range", min: 0, max: MAXR }), null,
+      fx('"0 to "&Sellable&" (sellable tickets)."', "0 to " + S + " (sellable tickets).", "text", "muted"));
+    inRow("Default tickets sold (% of sellable)", yPct(inp.expectedPct, "ExpectedPct"), null, "Where the calculator's slider starts. Only used by the link.");
     I.add([]);
 
-    heading(I, "Set in the calculator (gray)", 4);
-    inRow("Venue capacity", snap(inp.capacity, "int"));
-    inRow("Comps / guest list", snap(inp.comps, "int", { name: "Comps" }));
-    inRow("Sellable tickets", snap(S, "int", { name: "Sellable" }));
-    inRow("Ticket price", snap(inp.price, "money"));
-    inRow("Different price at the door", snap(inp.doorPrice, "money"), gOn(inp.doorPriceOn));
-    inRow("Sold online via " + pn, snap(inp.onlinePct / 100, "pct", { fmt: FMT.pctIn }), null, "The rest sell at the door.");
-    inRow("Door sales paid in cash", snap(inp.doorCashPct / 100, "pct", { fmt: FMT.pctIn }));
-    inRow("Door card processing", snap(inp.doorCardPct / 100, "pct", { fmt: FMT.pctIn }));
-    inRow("Plus per card ticket", snap(inp.doorCardFixed, "money"));
-    inRow("Sales tax rate", snap(inp.taxRate / 100, "pct", { fmt: FMT.pctIn }), gOn(inp.taxOn));
-    inRow("Sales tax is", snap(inp.taxMode === "included" ? "Included in price" : "Added on top", "text", { align: "right" }));
-    inRow("Ticketing platform", snap(pn, "text", { align: "right" }));
-    inRow(pn + " fees", snap(inp.ebMode === "pass" ? "Passed to buyer" : "Absorbed by us", "text", { align: "right" }));
-    inRow("Service fee", snap(inp.ebServicePct / 100, "pct", { fmt: FMT.pctIn }));
-    inRow("Plus per ticket", snap(inp.ebServiceFixed, "money"));
-    inRow("Payment processing", snap(inp.ebProcPct / 100, "pct", { fmt: FMT.pctIn }));
-    inRow("Venue % of door", snap(inp.doorCutPct / 100, "pct", { fmt: FMT.pctIn }), gOn(inp.doorCutOn));
-    inRow("% of door is taken from", snap(X.CUT_SHORT[inp.doorCutBasis], "text", { align: "right" }));
-    inRow("Venue per-head fee", snap(inp.venuePerHead, "money"), gOn(inp.venuePerHeadOn), "Everyone in the room, comps included.");
-    inRow("Default tickets sold (% of sellable)", snap(inp.expectedPct / 100, "pct", { fmt: FMT.pctIn }));
+    heading(I, "Tickets & sales", 4);
+    inRow("Venue capacity", yInt(inp.capacity, "Capacity", { type: "range", min: 1, max: MAXR }), null, "Up to " + MAXR.toLocaleString("en-US") + " in this sheet.");
+    inRow("Comps / guest list", yInt(inp.comps, "Comps", { type: "range", min: 0, max: MAXR }));
+    inRow(txt("Sellable tickets", "label"), fx("MAX(0,CapEff-CompsEff)", S, "int", "label", { name: "Sellable" }), null, "Capacity minus comps.");
+    inRow("Ticket price", yMoney(inp.price, "Price"));
+    inRow("Different price at the door", yMoney(inp.doorPrice, "DoorPrice"), yOn(inp.doorPriceOn, "DoorPriceOn"));
+    inRow(fx(platF("Sold online via "), "Sold online via " + pn, "text", "label"), yPct(inp.onlinePct, "OnlinePct"), null, "The rest sell at the door.");
+    inRow("Door sales paid in cash", yPct(inp.doorCashPct, "DoorCashPct"));
+    inRow("Door card processing", yPct(inp.doorCardPct, "DoorCardPct"));
+    inRow("Plus per card ticket", yMoney(inp.doorCardFixed, "DoorCardFixed"));
+    I.add([]);
+
+    heading(I, "Sales tax", 4);
+    inRow("Sales tax rate", yPct(inp.taxRate, "TaxRate", 10), yOn(inp.taxOn, "TaxOn"));
+    inRow("Sales tax is", yChoice(TAX_LABEL[inp.taxMode], "TaxMode", vals(TAX_LABEL)));
+    I.add([]);
+
+    heading(I, "Ticketing platform", 4);
+    inRow("Ticketing platform", yText(inp.ticketPlatform, "Platform"));
+    inRow(fx(platF("", " fees"), pn + " fees", "text", "label"), yChoice(FEE_LABEL[inp.ebMode], "FeeMode", vals(FEE_LABEL)));
+    inRow("Service fee", yPct(inp.ebServicePct, "SvcPct"));
+    inRow("Plus per ticket", yMoney(inp.ebServiceFixed, "SvcFixed"));
+    inRow("Payment processing", yPct(inp.ebProcPct, "ProcPct", 0.5), null, "Up to 50%.");
+    I.add([]);
+
+    heading(I, "Venue", 4);
+    inRow("Venue % of door", yPct(inp.doorCutPct, "DoorCutPct"), yOn(inp.doorCutOn, "DoorCutOn"));
+    inRow("% of door is taken from", yChoice(CUT_LABEL[inp.doorCutBasis], "DoorCutBasis", vals(CUT_LABEL)));
+    inRow("Flat rental / fee", yMoney(inp.venueRental, "VenueRental"), yOn(inp.venueRentalOn, "VenueRentalOn"));
+    inRow("Venue per-head fee", yMoney(inp.venuePerHead, "PerHead"), yOn(inp.venuePerHeadOn, "PerHeadOn"), "Everyone in the room, comps included.");
     I.add([]);
 
     heading(I, "Headliner deal", 4);
     inRow("Guarantee (flat)", yMoney(inp.hlGuarantee, "HLGuarantee"), yOn(inp.hlGuaranteeOn, "HLGuaranteeOn"));
     inRow("% of ticket sales", yPct(inp.hlPct, "HLPct"), yOn(inp.hlPctOn, "HLPctOn"));
-    inRow("% of", yChoice(BASIS_LABEL[inp.hlPctBasis], "HLPctBasis", [BASIS_LABEL.grossFace, BASIS_LABEL.faceNet, BASIS_LABEL.net]));
-    inRow("% starts", yChoice(START_LABEL[inp.hlPctStart], "HLPctStart", [START_LABEL.first, START_LABEL.breakEven, START_LABEL.afterN]));
+    inRow("% of", yChoice(BASIS_LABEL[inp.hlPctBasis], "HLPctBasis", vals(BASIS_LABEL)));
+    inRow("% starts", yChoice(START_LABEL[inp.hlPctStart], "HLPctStart", vals(START_LABEL)));
     inRow("% starts after how many tickets", yInt(inp.hlPctStartN, "HLPctStartN"), null, "Used when % starts is " + START_LABEL.afterN + ".");
     inRow("$ per ticket sold", yMoney(inp.hlPerTicket, "HLPerTicket"), yOn(inp.hlPerTicketOn, "HLPerTicketOn"));
-    inRow("$ per ticket starts", yChoice(START_LABEL[inp.hlPerTicketStart], "HLPerTicketStart", [START_LABEL.first, START_LABEL.breakEven, START_LABEL.afterN]));
+    inRow("$ per ticket starts", yChoice(START_LABEL[inp.hlPerTicketStart], "HLPerTicketStart", vals(START_LABEL)));
     inRow("$ per ticket starts after how many tickets", yInt(inp.hlPerTicketStartN, "HLPerTicketStartN"));
     inRow("Backend: % of profit after break-even", yPct(inp.hlBackendPct, "HLBackendPct"), yOn(inp.hlBackendOn, "HLBackendOn"));
     inRow("Versus: pay the greater of the guarantee or the % and per-ticket parts",
@@ -165,10 +286,6 @@
     inRow("Supporting slots", yInt(inp.supportSlots, "SupportSlots"));
     inRow("Price per slot", yMoney(inp.supportPrice, "SupportPrice"));
     inRow("VJ", yMoney(inp.vj, "VJFee"), yOn(inp.vjOn, "VJOn"));
-    I.add([]);
-
-    heading(I, "Venue", 4);
-    inRow("Flat rental / fee", yMoney(inp.venueRental, "VenueRental"), yOn(inp.venueRentalOn, "VenueRentalOn"));
     I.add([]);
 
     heading(I, "Labor", 4);
@@ -212,12 +329,69 @@
     heading(I, "Other", 4);
     inRow("Contingency", yPct(inp.contingencyPct, "ContingencyPct"), null, X.CONTINGENCY_HINT);
     inRow("Other income (merch, sponsor)", yMoney(inp.otherIncome, "OtherIncome"));
+    I.add([]);
+
+    // Link back to the calculator: PAGE_URL#q=n=..&key=value for every input that differs from LINK_BASE.
+    heading(I, "Link back to the calculator", 4);
+    I.add([null, linkCell()]);
+    var Q = [ // [model key, sheet name, kind]
+      ["venueName", "VenueName", "text"], ["showName", "ShowName", "text"], ["capacity", "Capacity", "int"], ["comps", "Comps", "int"],
+      ["price", "Price", "money"], ["expectedPct", "ExpectedPct", "pct"], ["onlinePct", "OnlinePct", "pct"], ["doorPriceOn", "DoorPriceOn", "bool"],
+      ["doorPrice", "DoorPrice", "money"], ["doorCashPct", "DoorCashPct", "pct"], ["doorCardPct", "DoorCardPct", "pct"], ["doorCardFixed", "DoorCardFixed", "money"],
+      ["taxOn", "TaxOn", "bool"], ["taxRate", "TaxRate", "pct"], ["taxMode", "TaxMode", TAX_LABEL], ["ticketPlatform", "Platform", "text"],
+      ["ebServicePct", "SvcPct", "pct"], ["ebServiceFixed", "SvcFixed", "money"], ["ebProcPct", "ProcPct", "pct"], ["ebMode", "FeeMode", FEE_LABEL],
+      ["doorCutOn", "DoorCutOn", "bool"], ["doorCutPct", "DoorCutPct", "pct"], ["doorCutBasis", "DoorCutBasis", CUT_LABEL],
+      ["venueRentalOn", "VenueRentalOn", "bool"], ["venueRental", "VenueRental", "money"], ["venuePerHeadOn", "PerHeadOn", "bool"], ["venuePerHead", "PerHead", "money"],
+      ["hlGuaranteeOn", "HLGuaranteeOn", "bool"], ["hlGuarantee", "HLGuarantee", "money"], ["hlPctOn", "HLPctOn", "bool"], ["hlPct", "HLPct", "pct"],
+      ["hlPctBasis", "HLPctBasis", BASIS_LABEL], ["hlPctStart", "HLPctStart", START_LABEL], ["hlPctStartN", "HLPctStartN", "int"],
+      ["hlPerTicketOn", "HLPerTicketOn", "bool"], ["hlPerTicket", "HLPerTicket", "money"], ["hlPerTicketStart", "HLPerTicketStart", START_LABEL],
+      ["hlPerTicketStartN", "HLPerTicketStartN", "int"], ["hlBackendOn", "HLBackendOn", "bool"], ["hlBackendPct", "HLBackendPct", "pct"], ["hlVersus", "HLVersus", "yes"],
+      ["hlTravel", "HLTravel", "money"], ["hlHospitality", "HLHospitality", "money"], ["supportSlots", "SupportSlots", "int"], ["supportPrice", "SupportPrice", "money"],
+      ["vjOn", "VJOn", "bool"], ["vj", "VJFee", "money"], ["soundTechsOn", "SoundTechsOn", "bool"], ["soundTechs", "SoundTechs", "int"],
+      ["soundTechPay", "SoundTechPay", "money"], ["stagehandsOn", "StagehandsOn", "bool"], ["stagehands", "Stagehands", "int"], ["stagehandPay", "StagehandPay", "money"],
+      ["securityOn", "SecurityOn", "bool"], ["security", "Security", "money"], ["soundOn", "SoundRentalOn", "bool"], ["sound", "SoundRental", "money"],
+      ["gearOn", "GearOn", "bool"], ["gear", "Gear", "money"], ["photo", "Photo", "money"], ["ads", "Ads", "money"], ["poster", "Poster", "money"],
+      ["insuranceOn", "InsuranceOn", "bool"], ["insurance", "Insurance", "money"], ["contingencyPct", "ContingencyPct", "pct"], ["otherIncome", "OtherIncome", "money"]
+    ];
+    function qPiece(q) {
+      var key = q[0], nm = q[1], kind = q[2], base = X.LINK_BASE[key], e, b;
+      if (kind === "text") { e = nm + '&""'; b = str(base); return "IF(" + e + "<>" + b + ',"&' + key + '="&' + urlEnc(e) + ',"")'; }
+      if (kind === "money") { e = "ROUND(" + nm + ",2)"; b = base; }
+      else if (kind === "int") { e = "ROUND(" + nm + ",0)"; b = base; }
+      else if (kind === "pct") { e = "ROUND(" + nm + "*100,6)"; b = base; }
+      else if (kind === "bool") { e = "IF(" + nm + '="On",1,0)'; b = base ? 1 : 0; }
+      else if (kind === "yes") { e = "IF(" + nm + '="Yes",1,0)'; b = base ? 1 : 0; }
+      else { e = enumF(nm, kind); b = str(base); }
+      return "IF(" + e + "<>" + b + ',"&' + key + '="&' + e + ',"")';
+    }
+    var linkParts = [], per = 12;
+    for (var qi = 0; qi < Q.length; qi += per) linkParts.push(Q.slice(qi, qi + per).map(qPiece).join("&"));
+    var custParts = customRows.map(function (c, i) {
+      var nm = "Custom_" + (i + 1) + "_Name", am = "Custom_" + (i + 1) + "_Amount";
+      return "IF(AND(" + nm + '="",' + am + '=""),"","&c' + (i + 1) + '="&' + urlEnc(nm + '&""') + '&"~"&ROUND(N(' + am + "),2))";
+    });
+    linkParts.push(custParts.join("&"));
+    var partNames = [];
+    linkParts.forEach(function (f, i) {
+      partNames.push("Link_Part_" + (i + 1));
+      I.add([null, txt(i ? "" : "Link pieces (used by the formula below)", "muted"), fx(f, "", "text", "work", { name: "Link_Part_" + (i + 1) })]);
+    });
+    inRow(txt("Link (copy this if the link above doesn't open)", "label"),
+      fx(str(X.PAGE_URL + "#q=n=") + "&ChosenN&" + partNames.join("&"), ctx.link, "text", "muted", { name: "CalcLink", span: 3 }));
+    I.add([]);
+
+    heading(I, "Working values", 4);
+    inRow("Capacity used (whole, at least 1)", fx("MAX(1,ROUND(Capacity,0))", inp.capacity, "int", "work", { name: "CapEff" }));
+    inRow("Comps used (whole, at most capacity)", fx("MIN(ROUND(Comps,0),CapEff)", inp.comps, "int", "work", { name: "CompsEff" }));
+    inRow("Table rows (largest ticket count in the sheet)", fx(String(MAXR), MAXR, "int", "work", { name: "MaxRows" }),
+      null, fx('IF(Sellable>MaxRows,"Too many tickets for this sheet: export again from the calculator.","")', "", "text", "muted"));
+    inRow("Sales tax rate used", fx('IF(TaxOn="On",TaxRate,0)', inp.taxOn ? inp.taxRate / 100 : 0, "pct", "work", { name: "TaxR", fmt: FMT.pctIn }));
 
     // ---------- By ticket count (built before the sheets that read it; listed last)
     var B = new Sheet("By ticket count", [], LIGHT.ink2);
     sheets.byT = B;
     var COLS = [
-      // key, header, width, kind ('res' result column, 'snap' calculator value, 'work' formula), type
+      // key, header, width, kind ('res' result column, 'tix' ticket side, 'work' headliner working), type
       ["n", "Tickets", 9, "res", "int"],
       ["online", "Online", 9, "res", "int"],
       ["door", "Door", 9, "res", "int"],
@@ -228,18 +402,19 @@
       ["net", "Net", 14, "res", "money"],
       ["note", "", 22, "res", "text"],
       ["gap", "", 3, "gap", "text"],
-      ["doorCard", "Door card tickets", 11, "snap", "int"],
-      ["gross", "Gross face", 13, "snap", "money"],
-      ["faceNet", "Face net of tax", 13, "snap", "money"],
-      ["tax", "Sales tax", 12, "snap", "money"],
-      ["fees", pn + " fees", 12, "snap", "money"],
-      ["passed", "Fees paid by buyers", 12, "snap", "money"],
-      ["absorbed", "Fees we absorb", 12, "snap", "money"],
-      ["doorProc", "Door card processing", 12, "snap", "money"],
-      ["doorCut", "Venue % of door", 12, "snap", "money"],
-      ["perHead", "Per-head fee", 12, "snap", "money"],
-      ["paidOn", "Buyers paid online", 13, "snap", "money"],
-      ["paidDoor", "Buyers paid at door", 13, "snap", "money"],
+      ["doorCard", "Door card tickets", 11, "tix", "int"],
+      ["gross", "Gross face", 13, "tix", "money"],
+      ["faceNet", "Face net of tax", 13, "tix", "money"],
+      ["tax", "Sales tax", 12, "tix", "money"],
+      ["fees", null, 12, "tix", "money"],
+      ["passed", "Fees paid by buyers", 12, "tix", "money"],
+      ["absorbed", "Fees we absorb", 12, "tix", "money"],
+      ["doorProc", "Door card processing", 12, "tix", "money"],
+      ["cutBasis", "Venue % basis", 13, "tix", "money"],
+      ["doorCut", "Venue % of door", 12, "tix", "money"],
+      ["perHead", "Per-head fee", 12, "tix", "money"],
+      ["paidOn", "Buyers paid online", 13, "tix", "money"],
+      ["paidDoor", "Buyers paid at door", 13, "tix", "money"],
       ["base", "Net before bonus parts", 14, "work", "money"],
       ["basis", "Headliner % basis", 13, "work", "money"],
       ["pctPart", "% part", 11, "work", "money"],
@@ -255,58 +430,81 @@
     B.columns = COLS.map(function (c) { return c[2]; });
     function L$(key) { return colLetter(C[key]); }
     B.add([txt("By ticket count", "title")]);
-    B.add([txt(ctx.title, "label", { bold: true })]);
-    B.add([txt("One row per ticket count at " + X.priceText(inp.price) + " a ticket. Gray columns come from the calculator; the rest are formulas.", "muted", { span: 9 })]);
-    var chosenRow = B.add([txt("Chosen count", "label", { bold: true, span: 2 }), null,
+    B.add([fx("ScenarioTitle", ctx.title, "text", "label", { bold: true })]);
+    B.add([fx('"One row per ticket count at "&' + moneyTextAuto("Price") + '&" a ticket, up to the sellable tickets. Every number is a formula."',
+      "One row per ticket count at " + X.priceText(inp.price) + " a ticket, up to the sellable tickets. Every number is a formula.", "text", "muted", { span: 9 })]);
+    B.add([txt("Chosen count", "label", { bold: true, span: 2 }), null,
       fx("MIN(MAX(ROUND(TicketsSold,0),0),Sellable)", n, "int", "total", { name: "ChosenN" }), txt("From Tickets sold on Inputs.", "muted", { span: 4 })]);
-    var bandRow = B.add([txt("Results", "band", { span: 9 }), null, null, null, null, null, null, null, null, null,
-      txt("Ticket side (from the calculator)", "band", { span: 12, fill: "#ecebe6" }), null, null, null, null, null, null, null, null, null, null, null,
-      txt("Headliner and profit (formulas)", "band", { span: 9 })]);
-    var head = B.add(COLS.map(function (c) { return c[0] === "gap" ? null : txt(c[1], "colhead", { wrap: true, align: c[4] === "text" ? "left" : "right" }); }));
-    var r0 = head + 1, rN = head + 1 + S;
+    B.add([txt("Results", "band", { span: 9 }), null, null, null, null, null, null, null, null, null,
+      txt("Ticket side", "band", { span: 13, fill: "#ecebe6" }), null, null, null, null, null, null, null, null, null, null, null, null,
+      txt("Headliner and profit", "band", { span: 9 })]);
+    var head = B.add(COLS.map(function (c) {
+      if (c[0] === "gap") return null;
+      if (c[0] === "fees") return fx(platF("", " fees"), pn + " fees", "text", "colhead", { wrap: true, align: "right" });
+      return txt(c[1], "colhead", { wrap: true, align: c[4] === "text" ? "left" : "right" });
+    }));
+    var r0 = head + 1, rN = head + 1 + MAXR;
     B.freeze = head; B.freezeCols = 1;
-    rs.forEach(function (x, i) {
-      var R = r0 + i, row = [];
-      function ref(key) { return L$(key) + R; }
-      var basis = basisValue(x, inp.hlPctBasis);
-      var nbb = x.netBeforeBackend;
-      var base = x.netTicketRevenue + inp.otherIncome - x.fixedCostsTotal;
-      var vals = {
-        n: cell(x.n, "int", "label"),
-        online: snap(x.counts.online, "int"), door: snap(x.counts.door, "int"), paid: snap(x.buyersPaid, "money"), ntr: snap(x.netTicketRevenue, "money"),
-        hlpay: fx(ref("deal") + "+" + ref("backend"), x.headliner.pay, "money", "label"),
-        costs: fx("FixedTotal+(" + ref("deal") + "-GuaranteeAmt)+" + ref("backend"), x.totalCosts, "money", "label"),
-        net: fx(ref("nbb") + "-" + ref("backend"), x.net, "money", "label", { bold: true }),
-        note: fx('IF(' + ref("n") + '=BreakEven,"Break-even","")&IF(AND(' + ref("n") + '=BreakEven,' + ref("n") + '=ChosenN),", ","")&IF(' + ref("n") + '=ChosenN,"Chosen count","")',
-          (be === x.n ? "Break-even" : "") + (be === x.n && n === x.n ? ", " : "") + (n === x.n ? "Chosen count" : ""), "text", "label", { bold: true }),
+    var ARGS = function (R) { return function (key) { return L$(key) + R; }; };
+    for (var kk = 0; kk <= MAXR; kk++) {
+      var R = r0 + kk, row = [], ref = ARGS(R), x = rs[kk];
+      var blank = !x;
+      var g = function (f) { return 'IF(' + ref("n") + '="","",' + f + ")"; };
+      var v = function (val) { return blank ? "" : val; };
+      var basis = x ? basisValue(x, inp.hlPctBasis) : "";
+      var base = x ? x.netTicketRevenue + inp.otherIncome - x.fixedCostsTotal : "";
+      var vals2 = {
+        n: fx("IF(" + kk + "<=Sellable," + kk + ',"")', v(kk), "int", "label"),
+        online: fx(g("ROUND(ROUND(" + ref("n") + "*OnlinePct,9),0)"), v(x && x.counts.online), "int", "snap"),
+        door: fx(g(ref("n") + "-" + ref("online")), v(x && x.counts.door), "int", "snap"),
+        paid: fx(g(ref("paidOn") + "+" + ref("paidDoor")), v(x && x.buyersPaid), "money", "snap"),
+        ntr: fx(g(ref("faceNet") + "-" + ref("absorbed") + "-" + ref("doorProc") + "-" + ref("doorCut") + "-" + ref("perHead")), v(x && x.netTicketRevenue), "money", "snap"),
+        hlpay: fx(g(ref("deal") + "+" + ref("backend")), v(x && x.headliner.pay), "money", "label"),
+        costs: fx(g("FixedTotal+(" + ref("deal") + "-GuaranteeAmt)+" + ref("backend")), v(x && x.totalCosts), "money", "label"),
+        net: fx(g(ref("nbb") + "-" + ref("backend")), v(x && x.net), "money", "label", { bold: true }),
+        note: fx(g('IF(' + ref("n") + '=BreakEven,"Break-even","")&IF(AND(' + ref("n") + '=BreakEven,' + ref("n") + '=ChosenN),", ","")&IF(' + ref("n") + '=ChosenN,"Chosen count","")'),
+          blank ? "" : (be === kk ? "Break-even" : "") + (be === kk && n === kk ? ", " : "") + (n === kk ? "Chosen count" : ""), "text", "label", { bold: true }),
         gap: null,
-        doorCard: snap(x.counts.doorCard, "int"), gross: snap(x.grossFace, "money"), faceNet: snap(x.faceNet, "money"), tax: snap(x.tax, "money"),
-        fees: snap(x.eventbrite.total, "money"), passed: snap(x.eventbrite.passed, "money"), absorbed: snap(x.eventbrite.absorbed, "money"),
-        doorProc: snap(x.doorProc, "money"), doorCut: snap(x.doorCut, "money"), perHead: snap(x.venue.perHead, "money"),
-        paidOn: snap(x.buyersPaidOnline, "money"), paidDoor: snap(x.buyersPaidDoor, "money"),
-        base: fx(ref("ntr") + "+OtherIncome-FixedTotal", base, "money", "work"),
-        basis: fx('IF(HLPctBasis="' + BASIS_LABEL.grossFace + '",' + ref("gross") + ',IF(HLPctBasis="' + BASIS_LABEL.net + '",' + ref("ntr") + "," + ref("faceNet") + "))", basis, "money", "work"),
-        pctPart: fx('IF(AND(HLPctOn="On",' + ref("n") + ">PctThreshold),MAX(0," + ref("basis") + "-PctBasisAtStart)*HLPct,0)", x.headliner.pctPart, "money", "work"),
-        ptPart: fx('IF(HLPerTicketOn="On",MAX(0,' + ref("n") + "-PerTicketThreshold)*HLPerTicket,0)", x.headliner.perTicketPart, "money", "work"),
-        deal: fx('IF(HLVersus="Yes",MAX(GuaranteeAmt,' + ref("pctPart") + "+" + ref("ptPart") + "),GuaranteeAmt+" + ref("pctPart") + "+" + ref("ptPart") + ")", x.headliner.dealPay, "money", "work"),
-        nbb: fx(ref("ntr") + "+OtherIncome-FixedTotal-(" + ref("deal") + "-GuaranteeAmt)", nbb, "money", "work"),
-        backend: fx('IF(HLBackendOn="On",MAX(0,' + ref("nbb") + ")*HLBackendPct,0)", x.headliner.backend, "money", "work"),
-        baseFlag: fx("IF(" + ref("base") + ">=-" + EPS + ",1,0)", base >= -1e-9 ? 1 : 0, "int", "work"),
-        netFlag: fx("IF(" + ref("net") + ">=-" + EPS + ",1,0)", x.net >= -1e-9 ? 1 : 0, "int", "work")
+        doorCard: fx(g(ref("door") + "-ROUND(ROUND(" + ref("door") + "*DoorCashPct,9),0)"), v(x && x.counts.doorCard), "int", "snap"),
+        gross: fx(g(ref("online") + "*Price+" + ref("door") + "*PT_DP"), v(x && x.grossFace), "money", "snap"),
+        faceNet: fx(g(ref("online") + "*PT_fn+" + ref("door") + "*PT_dfn"), v(x && x.faceNet), "money", "snap"),
+        tax: fx(g(ref("online") + "*PT_tx+" + ref("door") + "*PT_dtx"), v(x && x.tax), "money", "snap"),
+        fees: fx(g(ref("online") + "*PT_fee"), v(x && x.eventbrite.total), "money", "snap"),
+        passed: fx(g(ref("online") + "*PT_pass"), v(x && x.eventbrite.passed), "money", "snap"),
+        absorbed: fx(g(ref("online") + "*PT_abs"), v(x && x.eventbrite.absorbed), "money", "snap"),
+        doorProc: fx(g(ref("doorCard") + "*PT_dcp"), v(x && x.doorProc), "money", "snap"),
+        cutBasis: fx(g("IF(DoorCutBasis=" + str(CUT_LABEL.afterTax) + "," + ref("faceNet") + ",IF(DoorCutBasis=" + str(CUT_LABEL.afterTaxFees) + "," +
+          ref("faceNet") + "-" + ref("absorbed") + "-" + ref("doorProc") + "," + ref("online") + "*PT_gr+" + ref("door") + "*PT_dgr))"), v(x && x.doorCutBasis), "money", "snap"),
+        doorCut: fx(g('IF(DoorCutOn="On",MAX(0,' + ref("cutBasis") + ")*DoorCutPct,0)"), v(x && x.doorCut), "money", "snap"),
+        perHead: fx(g('IF(PerHeadOn="On",(' + ref("n") + "+CompsEff)*PerHead,0)"), v(x && x.venue.perHead), "money", "snap"),
+        paidOn: fx(g(ref("online") + "*PT_buyer"), v(x && x.buyersPaidOnline), "money", "snap"),
+        paidDoor: fx(g(ref("door") + "*PT_dgr"), v(x && x.buyersPaidDoor), "money", "snap"),
+        base: fx(g(ref("ntr") + "+OtherIncome-FixedTotal"), v(base), "money", "work"),
+        basis: fx(g('IF(HLPctBasis="' + BASIS_LABEL.grossFace + '",' + ref("gross") + ',IF(HLPctBasis="' + BASIS_LABEL.net + '",' + ref("ntr") + "," + ref("faceNet") + "))"), v(basis), "money", "work"),
+        pctPart: fx(g('IF(AND(HLPctOn="On",' + ref("n") + ">PctThreshold),MAX(0," + ref("basis") + "-PctBasisAtStart)*HLPct,0)"), v(x && x.headliner.pctPart), "money", "work"),
+        ptPart: fx(g('IF(HLPerTicketOn="On",MAX(0,' + ref("n") + "-PerTicketThreshold)*HLPerTicket,0)"), v(x && x.headliner.perTicketPart), "money", "work"),
+        deal: fx(g('IF(HLVersus="Yes",MAX(GuaranteeAmt,' + ref("pctPart") + "+" + ref("ptPart") + "),GuaranteeAmt+" + ref("pctPart") + "+" + ref("ptPart") + ")"), v(x && x.headliner.dealPay), "money", "work"),
+        nbb: fx(g(ref("ntr") + "+OtherIncome-FixedTotal-(" + ref("deal") + "-GuaranteeAmt)"), v(x && x.netBeforeBackend), "money", "work"),
+        backend: fx(g('IF(HLBackendOn="On",MAX(0,' + ref("nbb") + ")*HLBackendPct,0)"), v(x && x.headliner.backend), "money", "work"),
+        baseFlag: fx(g("IF(" + ref("base") + ">=-" + EPS + ",1,0)"), v(base >= -1e-9 ? 1 : 0), "int", "work"),
+        netFlag: fx(g("IF(" + ref("net") + ">=-" + EPS + ",1,0)"), v(x && x.net >= -1e-9 ? 1 : 0), "int", "work")
       };
-      COLS.forEach(function (c) { row.push(vals[c[0]]); });
+      COLS.forEach(function (c) { row.push(vals2[c[0]]); });
       B.add(row);
-    });
+    }
     var BYT = {
       n: "ByT_Tickets", online: "ByT_Online", door: "ByT_Door", paid: "ByT_BuyersPaid", ntr: "ByT_NTR", hlpay: "ByT_HLPay", costs: "ByT_TotalCosts", net: "ByT_Net",
       doorCard: "ByT_DoorCard", gross: "ByT_GrossFace", faceNet: "ByT_FaceNet", tax: "ByT_Tax", fees: "ByT_Fees", passed: "ByT_FeesPassed", absorbed: "ByT_FeesAbsorbed",
-      doorProc: "ByT_DoorProc", doorCut: "ByT_DoorCut", perHead: "ByT_PerHead", paidOn: "ByT_PaidOnline", paidDoor: "ByT_PaidDoor",
+      doorProc: "ByT_DoorProc", cutBasis: "ByT_CutBasis", doorCut: "ByT_DoorCut", perHead: "ByT_PerHead", paidOn: "ByT_PaidOnline", paidDoor: "ByT_PaidDoor",
       basis: "ByT_HLBasis", pctPart: "ByT_PctPart", ptPart: "ByT_PerTicketPart", deal: "ByT_DealPay", backend: "ByT_Backend", baseFlag: "ByT_BaseFlag", netFlag: "ByT_NetFlag"
     };
-    Object.keys(BYT).forEach(function (k) { B.range(BYT[k], C[k], r0, rN); });
+    Object.keys(BYT).forEach(function (key) { B.range(BYT[key], C[key], r0, rN); });
     B.signCF("$" + L$("net") + "$" + r0 + ":$" + L$("net") + "$" + rN);
     B.cf.push({ ref: "$A$" + r0 + ":$" + L$("note") + "$" + rN, kind: "rowMark", noteCol: L$("note"), first: r0 });
-    void chosenRow; void bandRow;
+    B.chart = { headerRow: head, firstRow: r0, lastRow: rN, nCol: C.n, netCol: C.net };
+
+    // ---------- Price math (helper for the price grid and the break-even price)
+    var P = buildPriceMath(inp, n, S, MAXR, M, sheets);
 
     // ---------- Costs
     var Co = new Sheet("Costs", [2, 60, 18, 12], LIGHT.s7);
@@ -314,8 +512,8 @@
     topBlock(Co, "Costs", ctx);
     heading(Co, "Cost ledger at the chosen count");
     Co.add([null, fx('"At "&ChosenN&" tickets"', "At " + n + " tickets", "text", "muted")]);
-    function line(label, f, v, name, extra) { return Co.add([null, txt(label, "label", { indent: 1 }), fx(f, v, "money", "label", Object.assign({ name: name }, extra || {}))]); }
-    function sub(label, f, v) { return Co.add([null, txt(label, "subtotal"), fx(f, v, "money", "subtotal")]); }
+    function line(label, f, val, name, extra) { return Co.add([null, txt(label, "label", { indent: 1 }), fx(f, val, "money", "label", Object.assign({ name: name }, extra || {}))]); }
+    function sub(label, f, val) { return Co.add([null, txt(label, "subtotal"), fx(f, val, "money", "subtotal")]); }
     function group(title) { Co.add([null, txt(title, "subhead", { span: 2 })]); }
     group("Talent");
     line("Headliner pay", "HLPayAtCount", h.pay);
@@ -387,8 +585,8 @@
     sheets.talent = T;
     topBlock(T, "Talent", ctx);
     heading(T, "Headliner payout at the chosen count");
-    T.add([null, txt("Deal as exported: " + X.hlDescription(inp) + ". Change the deal on Inputs.", "muted", { span: 3, wrap: true })]);
-    function trow(label, f, v, extra, s) { return T.add([null, txt(label, s || "label", { indent: s ? undefined : 1 }), fx(f, v, "money", s || "label", extra)]); }
+    T.add([null, fx('"Deal: "&DealText&". Change the deal on Inputs."', "Deal: " + X.hlDescription(inp) + ". Change the deal on Inputs.", "text", "muted", { span: 3, wrap: true })]);
+    function trow(label, f, val, extra, s) { return T.add([null, txt(label, s || "label", { indent: s ? undefined : 1 }), fx(f, val, "money", s || "label", extra)]); }
     trow("Guarantee", 'IF(HLGuaranteeOn="On",HLGuarantee,0)', guaranteeAmt, { name: "GuaranteeAmt" });
     trow("% of ticket sales part", idx("ByT_PctPart"), h.pctPart);
     trow("$ per ticket part", idx("ByT_PerTicketPart"), h.perTicketPart);
@@ -415,41 +613,65 @@
     T.add([]);
     heading(T, "Working values");
     T.add([null, txt("Used by the formulas. " + NEVER.toLocaleString("en-US") + " stands for never.", "muted", { span: 3 })]);
-    function startF(startName, nName) {
-      return 'IF(' + startName + '="' + START_LABEL.first + '",0,IF(' + startName + '="' + START_LABEL.afterN + '",MAX(0,' + nName + '),IF(ISNUMBER(HLBreakEven),HLBreakEven,' + NEVER + ')))';
-    }
-    T.add([null, txt("% part threshold (tickets)", "label"), fx(startF("HLPctStart", "HLPctStartN"), pctThr, "int", "work", { name: "PctThreshold" })]);
-    T.add([null, txt("$ per ticket part threshold (tickets)", "label"), fx(startF("HLPerTicketStart", "HLPerTicketStartN"), ptThr, "int", "work", { name: "PerTicketThreshold" })]);
+    T.add([null, txt("% part threshold (tickets)", "label"), fx(startF("HLPctStart", "HLPctStartN", "HLBreakEven"), pctThr, "int", "work", { name: "PctThreshold" })]);
+    T.add([null, txt("$ per ticket part threshold (tickets)", "label"), fx(startF("HLPerTicketStart", "HLPerTicketStartN", "HLBreakEven"), ptThr, "int", "work", { name: "PerTicketThreshold" })]);
     T.add([null, txt("% basis at the threshold", "label"), fx("IF(PctThreshold>0,INDEX(ByT_HLBasis,MIN(PctThreshold,Sellable)+1),0)", pctBasisAtStart, "money", "work", { name: "PctBasisAtStart" })]);
+    // Deal wording, mirroring export.hlDescription()
+    var startTxt = function (s, nN) { return "IF(" + s + "=" + str(START_LABEL.first) + ',"from ticket 1",IF(' + s + "=" + str(START_LABEL.breakEven) + ',"after break-even","after "&ROUND(' + nN + ',0)&" tickets"))'; };
+    var basisShort = "IF(HLPctBasis=" + str(BASIS_LABEL.grossFace) + "," + str(X.HL_BASIS_SHORT.grossFace) + ",IF(HLPctBasis=" + str(BASIS_LABEL.net) + "," + str(X.HL_BASIS_SHORT.net) + "," + str(X.HL_BASIS_SHORT.faceNet) + "))";
+    T.add([null, txt("Deal wording: guarantee", "label"), fx('IF(HLGuaranteeOn="On",' + moneyText("HLGuarantee", false) + '&" guarantee","")', "", "text", "work", { name: "DealG" })]);
+    T.add([null, txt("Deal wording: %", "label"), fx('IF(HLPctOn="On",ROUND(HLPct*100,6)&"% of "&' + basisShort + '&" "&' + startTxt("HLPctStart", "HLPctStartN") + ',"")', "", "text", "work", { name: "DealP" })]);
+    T.add([null, txt("Deal wording: $ per ticket", "label"), fx('IF(HLPerTicketOn="On",' + moneyTextAuto("HLPerTicket") + '&"/ticket "&' + startTxt("HLPerTicketStart", "HLPerTicketStartN") + ',"")', "", "text", "work", { name: "DealT" })]);
+    T.add([null, txt("Deal wording: joined", "label"), fx('MID(IF(DealG<>"",DealSep&DealG,"")&IF(DealP<>"",DealSep&DealP,"")&IF(DealT<>"",DealSep&DealT,""),LEN(DealSep)+1,1000)', "", "text", "work", { name: "DealJ" })]);
+    T.add([null, txt("Deal wording: separator", "label"), fx('IF(HLVersus="Yes"," vs "," + ")', inp.hlVersus ? " vs " : " + ", "text", "work", { name: "DealSep" })]);
+    T.add([null, txt("Deal", "label"), fx('IF(DealJ&IF(HLBackendOn="On","x","")="","no pay set",DealJ&IF(HLBackendOn="On",IF(DealJ<>""," + ","")&ROUND(HLBackendPct*100,6)&"% backend",""))',
+      X.hlDescription(inp), "text", "work", { name: "DealText" })]);
 
     // ---------- Tickets & fees
     var Tk = new Sheet("Tickets & fees", [2, 56, 18, 10], LIGHT.s1);
     sheets.tickets = Tk;
     topBlock(Tk, "Tickets & fees", ctx);
-    heading(Tk, "Per ticket (from the calculator)");
-    Tk.add([null, txt(X.fmt$(inp.price, { cents: true }) + " face price" + (inp.doorPriceOn ? ", " + X.fmt$(inp.doorPrice, { cents: true }) + " at the door" : ""), "muted")]);
-    X.perTicketRows(r, inp).forEach(function (rw, i, all) {
-      var st = rw.cls === "total" ? "total" : "label";
-      if (i === all.length - 1) {
-        Tk.add([null, txt(rw.label, "total", { wrap: true }), fx('IF(ChosenN>0,NTRAtCount/ChosenN,"n/a")', r.n ? r.netTicketRevenue / r.n : "n/a", "auto", "total", { fmt: FMT.money })]);
-        return;
-      }
-      Tk.add([null, txt(rw.label, st, { indent: rw.cls === "sub" ? 1 : undefined }), rw.t === "text" ? snap(String(rw.v), "text", { align: "right" }) : snap(rw.v, "money", { bold: st === "total" })]);
-    });
+    heading(Tk, "Per ticket");
+    Tk.add([null, fx(moneyText("Price", true) + '&" face price"&IF(DoorPriceOn="On",", "&' + moneyText("DoorPrice", true) + '&" at the door","")',
+      X.fmt$(inp.price, { cents: true }) + " face price" + (inp.doorPriceOn ? ", " + X.fmt$(inp.doorPrice, { cents: true }) + " at the door" : ""), "text", "muted")]);
+    var ptF = ptFormulas("Price", "PT_DP", function (key) { return "PT_" + key; });
+    function ptRow(label, key, st, extra) {
+      var lab = typeof label === "string" ? txt(label, st === "sub" ? "label" : st || "label", { indent: st === "sub" ? 1 : undefined }) : label;
+      Tk.add([null, lab, fx(ptF[key], pt[key], "money", st === "total" ? "total" : "label", Object.assign({ name: "PT_" + key }, extra || {}))]);
+    }
+    var taxLbl = '"Sales tax "&IF(TaxOn="On",IF(TaxMode=' + str(TAX_LABEL.included) + ',"(inside the price)","(added on top)"),"(off)")';
+    ptRow("Ours after sales tax", "fn");
+    ptRow(fx(taxLbl, "Sales tax " + (inp.taxOn ? (inp.taxMode === "included" ? "(inside the price)" : "(added on top)") : "(off)"), "text", "label"), "tx");
+    ptRow("Online price incl. sales tax", "gr");
+    ptRow(fx(platF("", " service fee"), pn + " service fee", "text", "label", { indent: 1 }), "svc", "sub");
+    ptRow(fx(platF("", " processing"), pn + " processing", "text", "label", { indent: 1 }), "proc", "sub");
+    ptRow(fx(platF("", " fees ") + '&IF(FeeMode=' + str(FEE_LABEL.pass) + ',"paid by the buyer","absorbed by us")', pn + " fees " + (inp.ebMode === "pass" ? "paid by the buyer" : "absorbed by us"), "text", "label"), "fee");
+    ptRow("Fees we absorb, per online ticket", "abs", "sub");
+    ptRow("Fees the buyer pays, per online ticket", "pass", "sub");
+    ptRow("Buyer pays online", "buyer", "total", { name: "PT_buyer" });
+    Tk.add([null, txt("Door face price", "label"), fx('IF(DoorPriceOn="On",DoorPrice,Price)', pt ? r.perTicketPrices.doorPrice : 0, "money", "label", { name: "PT_DP" })]);
+    ptRow("Door: ours after sales tax", "dfn", "sub");
+    ptRow("Door: sales tax", "dtx", "sub");
+    ptRow("Door card fee (card buyers)", "dcp");
+    ptRow("Buyer pays at the door", "dgr", "total");
+    Tk.add([null, txt("We keep per ticket sold, after fees and the venue's cut", "total", { wrap: true }), fx('IF(ChosenN>0,NTRAtCount/ChosenN,"n/a")', r.n ? r.netTicketRevenue / r.n : "n/a", "auto", "total", { fmt: FMT.money })]);
     Tk.add([]);
     heading(Tk, "Ticket money at the chosen count");
-    Tk.add([null, fx('ChosenN&" sold + "&Comps&" comps = "&(ChosenN+Comps)&" attending"', n + " sold + " + inp.comps + " comps = " + (n + inp.comps) + " attending", "text", "muted")]);
-    function tm(label, f, v, t, s) { Tk.add([null, txt(label, s || "label", { indent: s === "sub" ? 1 : undefined }), fx(f, v, t || "money", s === "sub" ? "label" : (s || "label"))]); }
-    tm("Online tickets (" + pn + ")", idx("ByT_Online"), r.counts.online, "int");
+    Tk.add([null, fx('ChosenN&" sold + "&CompsEff&" comps = "&(ChosenN+CompsEff)&" attending"', n + " sold + " + inp.comps + " comps = " + (n + inp.comps) + " attending", "text", "muted")]);
+    function tm(label, f, val, t, s) {
+      var lab = typeof label === "string" ? txt(label, s || "label", { indent: s === "sub" ? 1 : undefined }) : label;
+      Tk.add([null, lab, fx(f, val, t || "money", s === "sub" ? "label" : (s || "label"))]);
+    }
+    tm(fx(platF("Online tickets (", ")"), "Online tickets (" + pn + ")", "text", "label"), idx("ByT_Online"), r.counts.online, "int");
     tm("Door tickets", idx("ByT_Door"), r.counts.door, "int");
     tm("Door tickets paid by card", idx("ByT_DoorCard"), r.counts.doorCard, "int", "sub");
     tm("Buyers paid online", idx("ByT_PaidOnline"), r.buyersPaidOnline, "money", "sub");
     tm("Buyers paid at the door", idx("ByT_PaidDoor"), r.buyersPaidDoor, "money", "sub");
     tm("Everything buyers paid", idx("ByT_BuyersPaid"), r.buyersPaid, "money", "total");
     tm("Sales tax collected (to the state)", "-" + idx("ByT_Tax"), -r.tax);
-    tm(pn + " fees paid by buyers", "-" + idx("ByT_FeesPassed"), -r.eventbrite.passed);
+    tm(fx(platF("", " fees paid by buyers"), pn + " fees paid by buyers", "text", "label"), "-" + idx("ByT_FeesPassed"), -r.eventbrite.passed);
     tm("Ticket sales after tax", idx("ByT_FaceNet"), r.faceNet, "money", "total");
-    tm(pn + " fees we absorb", "-" + idx("ByT_FeesAbsorbed"), -r.eventbrite.absorbed);
+    tm(fx(platF("", " fees we absorb"), pn + " fees we absorb", "text", "label"), "-" + idx("ByT_FeesAbsorbed"), -r.eventbrite.absorbed);
     tm("Door card processing", "-" + idx("ByT_DoorProc"), -r.doorProc);
     tm("Venue % of door", "-" + idx("ByT_DoorCut"), -r.venue.doorCut);
     tm("Venue per-head fee", "-" + idx("ByT_PerHead"), -r.venue.perHead);
@@ -460,13 +682,15 @@
     sheets.venue = V;
     topBlock(V, "Venue", ctx);
     heading(V, "Deal");
-    V.add([null, txt("% of door (from the calculator)", "label"), snap(inp.doorCutOn ? inp.doorCutPct / 100 : 0, "pct", { fmt: FMT.pctIn }), txt(inp.doorCutOn ? "of " + X.CUT_SHORT[inp.doorCutBasis] : "off", "muted")]);
-    V.add([null, txt("Flat rental / fee", "label"), fx('IF(VenueRentalOn="On",VenueRental,0)', L.venueRental, "money", "label"), txt("Change on Inputs", "muted")]);
-    V.add([null, txt("Per-head fee (from the calculator)", "label"), snap(inp.venuePerHeadOn ? inp.venuePerHead : 0, "money"), txt("Everyone in the room, comps included", "muted")]);
+    V.add([null, txt("% of door", "label"), fx('IF(DoorCutOn="On",DoorCutPct,0)', inp.doorCutOn ? inp.doorCutPct / 100 : 0, "pct", "label", { fmt: FMT.pctIn }),
+      fx('IF(DoorCutOn="On","of "&DoorCutBasis,"off")', inp.doorCutOn ? "of " + X.CUT_SHORT[inp.doorCutBasis] : "off", "text", "muted")]);
+    V.add([null, txt("Flat rental / fee", "label"), fx('IF(VenueRentalOn="On",VenueRental,0)', L.venueRental, "money", "label"), txt("Change these on Inputs", "muted")]);
+    V.add([null, txt("Per-head fee", "label"), fx('IF(PerHeadOn="On",PerHead,0)', inp.venuePerHeadOn ? inp.venuePerHead : 0, "money", "label"), txt("Everyone in the room, comps included", "muted")]);
     V.add([]);
     heading(V, "What the venue takes");
     var so = rs[S];
-    V.add([null, txt("Part", "subhead"), fx('"At "&ChosenN&" tickets"', "At " + n + " tickets", "text", "subhead", { align: "right" }), txt("Sold out (" + S + ")", "subhead", { align: "right" })]);
+    V.add([null, txt("Part", "subhead"), fx('"At "&ChosenN&" tickets"', "At " + n + " tickets", "text", "subhead", { align: "right" }),
+      fx('"Sold out ("&Sellable&")"', "Sold out (" + S + ")", "text", "subhead", { align: "right" })]);
     V.add([null, txt("% of door", "label"), fx(idx("ByT_DoorCut"), r.venue.doorCut, "money"), fx("INDEX(ByT_DoorCut,Sellable+1)", so.venue.doorCut, "money")]);
     V.add([null, txt("Flat rental / fee", "label"), fx("VenueRentalAmt", L.venueRental, "money"), fx("VenueRentalAmt", L.venueRental, "money")]);
     V.add([null, txt("Per-head fee", "label"), fx(idx("ByT_PerHead"), r.venue.perHead, "money"), fx("INDEX(ByT_PerHead,Sellable+1)", so.venue.perHead, "money")]);
@@ -479,9 +703,9 @@
     var Su = new Sheet("Summary", [3, 40, 16, 16, 16, 14, 14, 14], LIGHT.accent);
     sheets.summary = Su;
     Su.add([null, txt("Show feasibility", "title")]);
-    Su.add([null, txt(ctx.title, "label", { bold: true, span: 6 })]);
-    Su.add([null, txt("Exported " + ctx.date + ". " + EDIT_NOTE + " " + SNAP_NOTE, "muted", { span: 7, wrap: true })]);
-    Su.add([null, cell(ctx.link, "link", "muted", { text: "Open this scenario in the calculator" })]);
+    Su.add([null, fx("ScenarioTitle", ctx.title, "text", "label", { bold: true, span: 6 })]);
+    Su.add([null, txt("Exported " + ctx.date + ". " + EDIT_NOTE, "muted", { span: 7, wrap: true })]);
+    Su.add([null, linkCell()]);
     Su.add([]);
     heading(Su, "Headline numbers", 7);
     var netHead = Su.add([null, fx('"Net at "&ChosenN&" tickets"', "Net at " + n + " tickets", "text", "total"), fx("NetAtCount", r.net, "money", "total", { fmt: FMT.signed }),
@@ -492,11 +716,13 @@
     Su.add([null, txt("Headliner pay", "label"), fx("HLPayAtCount", h.pay, "money"), fx('"Headliner break-even: "&HLBreakEven', "Headliner break-even: " + (hlBE === null ? "never" : hlBE), "text", "muted", { span: 3 })]);
     Su.add([null, txt("Net ticket revenue", "label"), fx("NTRAtCount", r.netTicketRevenue, "money")]);
     Su.add([null, txt("Total costs", "label"), fx("TotalCostsAtCount", r.totalCosts, "money")]);
-    Su.add([null, txt("Buyer pays online", "label"), snap(r.buyerPaysOnline, "money"), txt(pn + " fees " + (inp.ebMode === "pass" ? "passed to the buyer" : "absorbed by us"), "muted", { span: 3 })]);
-    Su.add([null, txt("Buyer pays at the door", "label"), snap(r.buyerPaysDoor, "money")]);
+    Su.add([null, txt("Buyer pays online", "label"), fx("PT_buyer", r.buyerPaysOnline, "money", "label", { name: "BuyerPaysOnline" }),
+      fx(platF("", " fees ") + '&IF(FeeMode=' + str(FEE_LABEL.pass) + ',"passed to the buyer","absorbed by us")', pn + " fees " + (inp.ebMode === "pass" ? "passed to the buyer" : "absorbed by us"), "text", "muted", { span: 3 })]);
+    Su.add([null, txt("Buyer pays at the door", "label"), fx("PT_dgr", r.buyerPaysDoor, "money", "label", { name: "BuyerPaysDoor" })]);
     var bp = M.breakEvenPrice(inp, n);
-    Su.add([null, txt("Break-even price at " + n + " tickets (snapshot)", "label"), bp === null ? snap("None", "text", { align: "right" }) : snap(bp, "money"),
-      txt("From the calculator; doesn't update here.", "muted", { span: 3 })]);
+    Su.add([null, fx('"Break-even price at "&ChosenN&" tickets"', "Break-even price at " + n + " tickets", "text", "label"),
+      fx('IF(PM_ZeroOk=1,0,IF(ChosenN=0,"None",IF(PM_CapOk=0,"None",PM_LastHi/100)))', bp === null ? "None" : bp, "auto", "label", { name: "BreakEvenPrice", fmt: FMT.money }),
+      txt("Lowest ticket price (to the cent, up to $1,000) that breaks even; the door price keeps its markup.", "muted", { span: 3 })]);
     Su.add([]);
 
     heading(Su, "Where the money goes", 7);
@@ -511,28 +737,33 @@
       profit: "MAX(0,NetAtCount)", loss: "MAX(0,-NetAtCount)"
     };
     var whole = inflow + r.money.loss;
-    function moneyRow(key, label, hex, v, st, color) {
+    function moneyRow(key, label, hex, val, st, color) {
       var f = MONEY_F[key];
-      Su.add([hex ? txt("", "label", { fill: hex }) : null, txt(label, st || "label", { color: color }),
-        fx(f, v, "money", st || "label", { name: "Money_" + key, color: color }),
-        fx("IF(Inflow+Money_loss>0,Money_" + key + "/(Inflow+Money_loss),0)", whole > 0 ? v / whole : 0, "pct", st || "label", { color: color }),
-        fx("IF(ChosenN>0,Money_" + key + "/ChosenN,0)", n > 0 ? v / n : 0, "money", st || "label", { color: color })]);
+      Su.add([hex ? txt("", "label", { fill: hex }) : null, typeof label === "string" ? txt(label, st || "label", { color: color }) : label,
+        fx(f, val, "money", st || "label", { name: "Money_" + key, color: color }),
+        fx("IF(Inflow+Money_loss>0,Money_" + key + "/(Inflow+Money_loss),0)", whole > 0 ? val / whole : 0, "pct", st || "label", { color: color }),
+        fx("IF(ChosenN>0,Money_" + key + "/ChosenN,0)", n > 0 ? val / n : 0, "money", st || "label", { color: color })]);
     }
-    X.CATS.forEach(function (c) { moneyRow(c.k, X.catLabel(c, inp), c.hex, r.money[c.k]); });
+    X.CATS.forEach(function (c) {
+      var label = c.name.indexOf("{P}") >= 0
+        ? fx(platF(c.name.split("{P}")[0], c.name.split("{P}")[1] + (c.detail ? " (" + c.detail + ")" : "")), X.catLabel(c, inp), "text", "label")
+        : X.catLabel(c, inp);
+      moneyRow(c.k, label, c.hex, r.money[c.k]);
+    });
     moneyRow("loss", "Loss (costs not covered)", null, r.money.loss, "label", LIGHT.critText);
     Su.add([null, txt("Buyers paid + other income", "total"), fx(idx("ByT_BuyersPaid") + "+OtherIncome", inflow, "money", "total", { name: "Inflow" }), txt("", "total"),
       fx("IF(ChosenN>0,Inflow/ChosenN,0)", n > 0 ? inflow / n : 0, "money", "total")]);
     Su.add([]);
 
     heading(Su, "Scenarios at this price", 7);
-    Su.add([null, txt("At " + X.priceText(inp.price) + " a ticket", "muted")]);
+    Su.add([null, fx('"At "&' + moneyTextAuto("Price") + '&" a ticket"', "At " + X.priceText(inp.price) + " a ticket", "text", "muted")]);
     Su.add([null, txt("Sold", "subhead"), txt("Tickets", "subhead", { align: "right" }), txt("Net ticket revenue", "subhead", { align: "right" }),
       txt("Headliner pay", "subhead", { align: "right" }), txt("Total costs", "subhead", { align: "right" }), txt("Net", "subhead", { align: "right" })]);
     var scenFirst = 0, scenLast = 0;
     [25, 50, 75, 90, 100].forEach(function (p) {
-      var k2 = Math.round(S * p / 100), x = rs[k2];
-      var at = function (col) { return "INDEX(" + col + "," + (k2 + 1) + ")"; };
-      var row = Su.add([null, txt(p === 100 ? "Sold out" : p + "%", "label"), cell(k2, "int", "label"),
+      var k2 = Math.round(S * p / 100), x = rs[k2], rowNo = Su.next();
+      var at = function (col) { return "INDEX(" + col + ",$C" + rowNo + "+1)"; };
+      var row = Su.add([null, txt(p === 100 ? "Sold out" : p + "%", "label"), fx("ROUND(Sellable*" + p + "/100,0)", k2, "int", "label"),
         fx(at("ByT_NTR"), x.netTicketRevenue, "money", "label", { fmt: FMT.money0 }), fx(at("ByT_HLPay"), x.headliner.pay, "money", "label", { fmt: FMT.money0 }),
         fx(at("ByT_TotalCosts"), x.totalCosts, "money", "label", { fmt: FMT.money0 }), fx(at("ByT_Net"), x.net, "money", "label", { fmt: FMT.signed0, bold: true })]);
       if (!scenFirst) scenFirst = row;
@@ -541,21 +772,180 @@
     Su.signCF("$G$" + scenFirst + ":$G$" + scenLast);
     Su.add([]);
 
-    heading(Su, "Net profit by price and attendance (snapshot)", 7);
-    Su.add([null, txt("From the calculator at export; doesn't change when you edit this sheet. Blue is profit, red is loss.", "muted", { span: 7 })]);
+    heading(Su, "Net profit by price and attendance", 7);
+    Su.add([null, txt("Each cell is the net at that ticket price and attendance, the door price keeping its markup. Blue is profit, red is loss.", "muted", { span: 7 })]);
     var hg = X.heatGrid(inp, M);
     Su.add([null, txt("Sold \\ price", "subhead")].concat(hg.prices.map(function (p) {
       return cell(p, "money", "subhead", { fmt: FMT.money0, align: "center", bold: true });
     })));
-    hg.rows.forEach(function (row) {
-      var cur = row.n === n;
-      Su.add([null, txt(row.p + "% · " + row.n + " tickets", "label", { align: "right", bold: cur })].concat(row.cells.map(function (c) {
-        var hc = X.heatColor(c), here = cur && Math.abs(c.price - inp.price) < 0.005;
-        return cell(c.net, "money", "label", { fmt: FMT.money0, fill: hc.fill, color: hc.text, bold: true, align: "center", box: here ? LIGHT.ink : undefined });
+    var gFirst = 0, gLast = 0;
+    hg.rows.forEach(function (row, ri) {
+      var nRef = quoteSheet(PM) + "!" + P.gridN[ri];
+      var gr = Su.add([null, fx(row.p + '&"% · "&' + nRef + '&" tickets"', row.p + "% · " + row.n + " tickets", "text", "label", { align: "right" })].concat(row.cells.map(function (c, ci) {
+        return fx(quoteSheet(PM) + "!" + P.gridNet[ri][ci], c.net, "money", "label", { fmt: FMT.money0, bold: true, align: "center", name: "Grid_" + (ri + 1) + "_" + (ci + 1) });
       })));
+      if (!gFirst) gFirst = gr;
+      gLast = gr;
+    });
+    Su.cf.push({ ref: "C" + gFirst + ":" + colLetter(2 + hg.prices.length) + gLast, kind: "heat" });
+
+    return [sheets.summary, sheets.inputs, sheets.tickets, sheets.venue, sheets.talent, sheets.costs, sheets.byT, sheets.pm];
+  }
+
+  // The "Price math" tab: one column per price case. Each column has the per-ticket constants at its
+  // price, a flag per ticket count (breaks even counting the guarantee and every other cost but no
+  // bonus parts) whose first 1 is the headliner break-even at that price, and the net at the counts
+  // it needs. The 17 bisection columns take the same steps as model.breakEvenPrice, so the answer is
+  // the same to the cent. (The model's final walk-down never moves: the cent below the answer is
+  // always one the search already saw lose.)
+  function buildPriceMath(inp, n, S, MAXR, M, sheets) {
+    var hg = X.heatGrid(inp, M);
+    var gridPcts = hg.rows.map(function (rw) { return rw.p; });
+    var Pm = new Sheet(PM, [44, 8, 8, 8, 8, 12], LIGHT.ink2);
+    sheets.pm = Pm;
+    var cases = [];
+    hg.prices.forEach(function (p) { cases.push({ kind: "grid", label: "$" + p, price: p }); });
+    cases.push({ kind: "zero", label: "$0", price: 0 });
+    cases.push({ kind: "cap", label: "$1,000", price: PRICE_CAP_CENTS / 100 });
+    for (var i = 1; i <= BISECT_STEPS; i++) cases.push({ kind: "step", label: "Step " + i, step: i });
+    var FIRST_CASE_COL = 7;
+    cases.forEach(function (c, ci) { c.col = colLetter(FIRST_CASE_COL + ci); Pm.columns.push(c.kind === "step" ? 10 : 11); });
+
+    // Row layout
+    var rowOf = {}, labels = [], nextRow = 5;
+    function def(key, label) { rowOf[key] = nextRow++; labels.push([key, label]); }
+    def("case", "Price case");
+    def("lo", "Bisection: lowest losing price (cents)");
+    def("hi", "Bisection: highest breaking-even price (cents)");
+    def("mid", "Bisection: price tried (cents)");
+    def("P", "Ticket price");
+    def("DP", "Door price (keeps its markup)");
+    var PT_LBL = { fn: "Ours after sales tax", tx: "Sales tax", gr: "Online price incl. tax", svc: "Service fee", buyer: "Buyer pays online", proc: "Processing",
+      fee: "Platform fees", abs: "Fees we absorb", pass: "Fees the buyer pays", dfn: "Door: ours after tax", dtx: "Door: sales tax", dgr: "Buyer pays at the door", dcp: "Door card fee" };
+    PT_KEYS.forEach(function (k) { def(k, "Per ticket: " + PT_LBL[k]); });
+    def("hlBE", "Headliner break-even at this price");
+    def("pctThr", "% part threshold");
+    def("ptThr", "$ per ticket threshold");
+    def("thrN", "Count for the % basis at the threshold");
+    TS_KEYS.forEach(function (k) { def("t_" + k, "At the threshold: " + TS_LABEL[k]); });
+    def("hbThr", "% basis at the threshold");
+    var SLOTS = gridPcts.length;
+    for (var s = 1; s <= SLOTS; s++) {
+      def("s" + s + "_N", "Count " + s + ": tickets");
+      TS_KEYS.forEach(function (k) { def("s" + s + "_" + k, "Count " + s + ": " + TS_LABEL[k]); });
+      DEAL_KEYS.forEach(function (k) { def("s" + s + "_" + k, "Count " + s + ": " + DEAL_LABEL[k]); });
+    }
+    def("nextLo", "Bisection: next lowest losing price");
+    def("nextHi", "Bisection: next highest breaking-even price");
+    var flagHead = nextRow + 1, F0 = flagHead + 1, F1 = F0 + MAXR;
+
+    // Grid of rows: label column + per-row data columns, case columns filled below.
+    var grid = [];
+    function put(row, col, c) { while (grid.length < row) grid.push([]); var rw = grid[row - 1]; while (rw.length < col) rw.push(null); rw[col - 1] = c; }
+    put(1, 1, txt("Price math", "title"));
+    put(2, 1, txt("Helper for the price grid and the break-even price on Summary: the ticket side again at other prices. Nothing to edit here.", "muted", { span: 8 }));
+    labels.forEach(function (l) { put(rowOf[l[0]], 1, txt(l[1], l[0] === "case" ? "subhead" : "label")); });
+    put(flagHead, 1, txt("Ticket count rows (1 = breaks even before bonus parts)", "colhead", { wrap: true }));
+    ["Tickets", "Online", "Door", "Door card", "Per-head + fixed − other"].forEach(function (h2, j) { put(flagHead, 2 + j, txt(h2, "colhead", { wrap: true, align: "right" })); });
+
+    // Values from the model, per case
+    function caseModel(price, slotsN) {
+      var x = M.sanitize(M.withPrice(inp, price)), hl = M.headlinerBreakEven(x);
+      var r0 = M.compute(x, 0, { hlBE: hl });
+      var pThr = threshold(x.hlPctStart, x.hlPctStartN, hl), tThr = threshold(x.hlPerTicketStart, x.hlPerTicketStartN, hl);
+      var thrN = pThr > 0 && pThr <= S ? pThr : 0;
+      var rt = M.compute(x, thrN, { hlBE: hl });
+      var fc = r0.fixedCostsTotal;
+      return {
+        x: x, hl: hl, pt: ptValues(r0.perTicketPrices), pThr: pThr, tThr: tThr, thrN: thrN, ts: tsValues(rt, x), hbThr: pThr > 0 ? basisValue(rt, x.hlPctBasis) : 0,
+        slots: slotsN.map(function (N) { var rr = M.compute(x, N, { hlBE: hl }); return { N: N, ts: tsValues(rr, x), deal: dealValues(rr) }; }),
+        flag: function (k) { return k > S ? "" : (M.compute(x, k, { hlBE: hl }).netTicketRevenue + inp.otherIncome - fc >= -1e-9 ? 1 : 0); }
+      };
+    }
+    // Bisection, as model.breakEvenPrice runs it
+    var lo = 0, hi = PRICE_CAP_CENTS;
+    cases.forEach(function (c) {
+      if (c.kind === "grid") { c.model = caseModel(c.price, gridPcts.map(function (p) { return Math.round(S * p / 100); })); return; }
+      if (c.kind !== "step") { c.model = caseModel(c.price, [n]); return; }
+      c.lo = lo; c.hi = hi; c.mid = Math.floor((lo + hi) / 2);
+      c.model = caseModel(c.mid / 100, [n]);
+      var ok = c.model.slots[0].deal.ok === 1;
+      if (hi - lo > 1) { if (ok) hi = c.mid; else lo = c.mid; }
+      c.nextLo = lo; c.nextHi = hi;
     });
 
-    return [sheets.summary, sheets.inputs, sheets.tickets, sheets.venue, sheets.talent, sheets.costs, sheets.byT];
+    var gridN = [], gridNet = gridPcts.map(function () { return []; });
+    cases.forEach(function (c, ci) {
+      var col = c.col, mdl = c.model;
+      var R = function (key) { return col + rowOf[key]; };
+      put(rowOf["case"], FIRST_CASE_COL + ci, txt(c.label, "subhead", { align: "right" }));
+      if (c.kind === "step") {
+        var prev = cases[ci - 1];
+        put(rowOf.lo, FIRST_CASE_COL + ci, c.step === 1 ? fx("0", 0, "int", "work") : fx(prev.col + rowOf.nextLo, c.lo, "int", "work"));
+        put(rowOf.hi, FIRST_CASE_COL + ci, c.step === 1 ? fx(String(PRICE_CAP_CENTS), PRICE_CAP_CENTS, "int", "work") : fx(prev.col + rowOf.nextHi, c.hi, "int", "work"));
+        put(rowOf.mid, FIRST_CASE_COL + ci, fx("INT((" + R("lo") + "+" + R("hi") + ")/2)", c.mid, "int", "work"));
+        put(rowOf.P, FIRST_CASE_COL + ci, fx(R("mid") + "/100", c.mid / 100, "money", "work"));
+      } else {
+        put(rowOf.P, FIRST_CASE_COL + ci, fx(String(c.price), c.price, "money", "work"));
+      }
+      put(rowOf.DP, FIRST_CASE_COL + ci, fx('IF(DoorPriceOn="On",MAX(0,DoorPrice+' + R("P") + "-Price)," + R("P") + ")", mdl.x.doorPriceOn ? mdl.x.doorPrice : mdl.x.price, "money", "work"));
+      var ptf = ptFormulas(R("P"), R("DP"), R);
+      PT_KEYS.forEach(function (k) { put(rowOf[k], FIRST_CASE_COL + ci, fx(ptf[k], mdl.pt[k], "money", "work")); });
+      var fr = col + "$" + F0 + ":" + col + "$" + F1;
+      put(rowOf.hlBE, FIRST_CASE_COL + ci, fx("IFERROR(MATCH(1," + fr + ',0)-1,"never")', mdl.hl === null ? "never" : mdl.hl, "auto", "work"));
+      put(rowOf.pctThr, FIRST_CASE_COL + ci, fx(startF("HLPctStart", "HLPctStartN", R("hlBE")), mdl.pThr, "int", "work"));
+      put(rowOf.ptThr, FIRST_CASE_COL + ci, fx(startF("HLPerTicketStart", "HLPerTicketStartN", R("hlBE")), mdl.tThr, "int", "work"));
+      put(rowOf.thrN, FIRST_CASE_COL + ci, fx("IF(AND(" + R("pctThr") + ">0," + R("pctThr") + "<=Sellable)," + R("pctThr") + ",0)", mdl.thrN, "int", "work"));
+      var tsT = tsFormulas(R("thrN"), R("P"), R("DP"), R, function (k) { return R("t_" + k); });
+      TS_KEYS.forEach(function (k) { put(rowOf["t_" + k], FIRST_CASE_COL + ci, fx(tsT[k], mdl.ts[k], k === "on" || k === "door" || k === "card" ? "int" : "money", "work")); });
+      put(rowOf.hbThr, FIRST_CASE_COL + ci, fx("IF(" + R("pctThr") + ">0," + R("t_hb") + ",0)", mdl.hbThr, "money", "work"));
+      mdl.slots.forEach(function (sl, si) {
+        var pre = "s" + (si + 1) + "_", RS = function (k) { return R(pre + k); };
+        var nf = c.kind === "grid" ? "ROUND(Sellable*" + gridPcts[si] + "/100,0)" : "ChosenN";
+        put(rowOf[pre + "N"], FIRST_CASE_COL + ci, fx(nf, sl.N, "int", "work", c.kind === "grid" && ci === 0 ? { name: "Grid_N_" + (si + 1) } : undefined));
+        var tsS = tsFormulas(RS("N"), R("P"), R("DP"), R, RS);
+        TS_KEYS.forEach(function (k) { put(rowOf[pre + k], FIRST_CASE_COL + ci, fx(tsS[k], sl.ts[k], k === "on" || k === "door" || k === "card" ? "int" : "money", "work")); });
+        var dl = dealFormulas(RS("N"), RS, R("pctThr"), R("ptThr"), R("hbThr"));
+        DEAL_KEYS.forEach(function (k) {
+          var nm = si === 0 && k === "ok" ? (c.kind === "zero" ? "PM_ZeroOk" : c.kind === "cap" ? "PM_CapOk" : undefined) : undefined;
+          put(rowOf[pre + k], FIRST_CASE_COL + ci, fx(dl[k], sl.deal[k], k === "ok" ? "int" : "money", "work", nm ? { name: nm } : undefined));
+        });
+        if (c.kind === "grid") {
+          if (ci === 0) gridN.push("$" + col + "$" + rowOf[pre + "N"]);
+          gridNet[si].push("$" + col + "$" + rowOf[pre + "net"]);
+        }
+      });
+      if (c.kind === "step") {
+        var okR = R("s1_ok");
+        put(rowOf.nextLo, FIRST_CASE_COL + ci, fx("IF(" + R("hi") + "-" + R("lo") + ">1,IF(" + okR + "=1," + R("lo") + "," + R("mid") + ")," + R("lo") + ")", c.nextLo, "int", "work"));
+        put(rowOf.nextHi, FIRST_CASE_COL + ci, fx("IF(" + R("hi") + "-" + R("lo") + ">1,IF(" + okR + "=1," + R("mid") + "," + R("hi") + ")," + R("hi") + ")", c.nextHi, "int", "work",
+          c.step === BISECT_STEPS ? { name: "PM_LastHi" } : undefined));
+      }
+      // Flags: 1 when the ticket count breaks even counting the guarantee and every cost, no bonus parts.
+      for (var k = 0; k <= MAXR; k++) {
+        var rr = F0 + k, on = "$C" + rr, dr = "$D" + rr, cd = "$E" + rr;
+        var K = function (key) { return col + "$" + rowOf[key]; };
+        var fnT = on + "*" + K("fn") + "+" + dr + "*" + K("dfn");
+        var cbF = "IF(DoorCutBasis=" + str(CUT_LABEL.afterTax) + "," + fnT + ",IF(DoorCutBasis=" + str(CUT_LABEL.afterTaxFees) + "," + fnT + "-" + on + "*" + K("abs") + "-" + cd + "*" + K("dcp") +
+          "," + on + "*" + K("gr") + "+" + dr + "*" + K("dgr") + "))";
+        var f = 'IF($B' + rr + '="","",IF(' + fnT + "-" + on + "*" + K("abs") + "-" + cd + "*" + K("dcp") + '-IF(DoorCutOn="On",MAX(0,' + cbF + ")*DoorCutPct,0)-$F" + rr + ">=-" + EPS + ",1,0))";
+        put(rr, FIRST_CASE_COL + ci, fx(f, mdl.flag(k), "int", "work"));
+      }
+    });
+    // Per-count columns shared by every case
+    var fcTotal = M.compute(inp, 0).fixedCostsTotal;
+    for (var k2 = 0; k2 <= MAXR; k2++) {
+      var rr2 = F0 + k2, live = k2 <= S, x2 = live ? M.compute(inp, k2) : null;
+      put(rr2, 2, fx("IF(" + k2 + "<=Sellable," + k2 + ',"")', live ? k2 : "", "int", "work"));
+      put(rr2, 3, fx('IF($B' + rr2 + '="","",ROUND(ROUND($B' + rr2 + "*OnlinePct,9),0))", live ? x2.counts.online : "", "int", "work"));
+      put(rr2, 4, fx('IF($B' + rr2 + '="","",$B' + rr2 + "-$C" + rr2 + ")", live ? x2.counts.door : "", "int", "work"));
+      put(rr2, 5, fx('IF($B' + rr2 + '="","",$D' + rr2 + "-ROUND(ROUND($D" + rr2 + "*DoorCashPct,9),0))", live ? x2.counts.doorCard : "", "int", "work"));
+      put(rr2, 6, fx('IF($B' + rr2 + '="","",IF(PerHeadOn="On",($B' + rr2 + "+CompsEff)*PerHead,0)+FixedTotal-OtherIncome)",
+        live ? x2.venue.perHead + fcTotal - inp.otherIncome : "", "money", "work"));
+    }
+    Pm.rows = grid;
+    Pm.freeze = rowOf["case"]; Pm.freezeCols = 1;
+    return { gridN: gridN, gridNet: gridNet };
   }
 
   // ---------------------------------------------------------------- ExcelJS writer
@@ -615,6 +1005,7 @@
           }
           if (fmt && (numeric || (c.f && typeof c.v === "number"))) x.numFmt = fmt;
           if (numeric) al.horizontal = "right";
+          if (c.link) { font.color = { argb: argb(LIGHT.accent) }; font.underline = true; }
           if (c.bold) font.bold = true;
           if (c.color) font.color = { argb: argb(c.color) };
           if (c.fill) fill = c.fill;
@@ -626,6 +1017,7 @@
           if (fill) x.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(fill) } };
           if (Object.keys(bd).length) x.border = bd;
           if (c.dv) x.dataValidation = validation(c.dv);
+          if (st === "input") x.protection = { locked: false };
           if (c.name) wb.definedNames.add(quoteSheet(sh.name) + "!$" + colLetter(ci + 1) + "$" + (ri + 1), c.name);
 
           var span = Math.min(c.span || 1, ncols - ci);
@@ -656,6 +1048,11 @@
             { type: "cellIs", operator: "greaterThan", priority: 1, formulae: ["0.5"], style: { font: { color: { argb: argb(LIGHT.goodText) }, bold: true } } },
             { type: "cellIs", operator: "lessThan", priority: 2, formulae: ["-0.5"], style: { font: { color: { argb: argb(LIGHT.critText) }, bold: true } } }
           ] });
+        } else if (cf.kind === "heat") {
+          ws.addConditionalFormatting({ ref: cf.ref, rules: [
+            { type: "colorScale", priority: 4, cfvo: [{ type: "min" }, { type: "num", value: 0 }, { type: "max" }],
+              color: [{ argb: argb(LIGHT.divNeg) }, { argb: argb(LIGHT.divMid) }, { argb: argb(LIGHT.divPos) }] }
+          ] });
         } else if (cf.kind === "rowMark") {
           ws.addConditionalFormatting({ ref: cf.ref.replace(/\$/g, ""), rules: [
             { type: "expression", priority: 3, formulae: ["$" + cf.noteCol + cf.first + '<>""'], style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: argb(LIGHT.accentWash) } } } }
@@ -672,9 +1069,33 @@
     if (dv.type === "list") return Object.assign(base, { type: "list", allowBlank: false, formulae: ['"' + dv.list.join(",") + '"'], errorTitle: "Pick from the list", error: "Choose one of: " + dv.list.join(", ") });
     if (dv.type === "range") return Object.assign(base, { type: "whole", operator: "between", formulae: [dv.min, dv.max], errorTitle: "Out of range", error: "Enter a whole number from " + dv.min + " to " + dv.max + "." });
     if (dv.type === "int0") return Object.assign(base, { type: "whole", operator: "greaterThanOrEqual", formulae: [0], errorTitle: "Whole number", error: "Enter a whole number, 0 or more." });
-    if (dv.type === "pct") return Object.assign(base, { type: "decimal", operator: "between", formulae: [0, 1], errorTitle: "Percent", error: "Enter a percent from 0% to 100%." });
+    if (dv.type === "pct") { var mx = dv.max || 1; return Object.assign(base, { type: "decimal", operator: "between", formulae: [0, mx], errorTitle: "Percent", error: "Enter a percent from 0% to " + Math.round(mx * 100) + "%." }); }
     return Object.assign(base, { type: "decimal", operator: "greaterThanOrEqual", formulae: [0], errorTitle: "Amount", error: "Enter an amount, 0 or more." });
   }
 
-  return { buildSheets: buildSheets, writeWorkbook: writeWorkbook, fileName: X.fileName, START_LABEL: START_LABEL, BASIS_LABEL: BASIS_LABEL };
+  // What the Sheets API adds after upload (the .xlsx can't carry a warning-only lock or a chart that
+  // Google keeps): input cell ranges, per sheet, to leave unprotected, and the profit chart's source.
+  function decorations(sheets) {
+    var out = { sheets: [], inputs: [], chart: null };
+    sheets.forEach(function (sh) {
+      out.sheets.push(sh.name);
+      var cols = {};
+      sh.rows.forEach(function (row, ri) {
+        (row || []).forEach(function (c, ci) { if (c && c.s === "input") (cols[ci] = cols[ci] || []).push(ri); });
+      });
+      Object.keys(cols).forEach(function (ci) {
+        var rows = cols[ci], start = rows[0], prev = rows[0];
+        for (var i = 1; i <= rows.length; i++) {
+          if (i < rows.length && rows[i] === prev + 1) { prev = rows[i]; continue; }
+          out.inputs.push({ sheet: sh.name, r1: start, r2: prev + 1, c1: +ci, c2: +ci + 1 }); // 0-based, end exclusive
+          if (i < rows.length) { start = prev = rows[i]; }
+        }
+      });
+      if (sh.chart) out.chart = { sheet: sh.name, headerRow: sh.chart.headerRow - 1, lastRow: sh.chart.lastRow, nCol: sh.chart.nCol - 1, netCol: sh.chart.netCol - 1 };
+    });
+    return out;
+  }
+
+  return { buildSheets: buildSheets, writeWorkbook: writeWorkbook, decorations: decorations, fileName: X.fileName,
+    START_LABEL: START_LABEL, BASIS_LABEL: BASIS_LABEL, TAX_LABEL: TAX_LABEL, FEE_LABEL: FEE_LABEL };
 });
