@@ -592,7 +592,6 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { t.hidden = true; }, 4000);
   }
-  function touchFirst() { return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); }
   function currentLink() { return X.encodeLink(state.inputs, state.n, M); }
   function scenarioTitle(inp) {
     var show = String(inp.showName || "").trim(), venue = String(inp.venueName || "").trim() || "New venue";
@@ -600,15 +599,11 @@
   }
   function copyLink() {
     var url = currentLink();
-    if (touchFirst() && navigator.share) {
-      navigator.share({ title: scenarioTitle(state.inputs), url: url }).catch(function (err) {
-        if (!err || err.name !== "AbortError") copyText(url, "Link copied. Anyone who opens it sees this exact scenario.");
-      });
-      return;
-    }
-    copyText(url, "Link copied. Anyone who opens it sees this exact scenario.");
+    copyText(url, "Link copied. Anyone who opens it sees this exact scenario.", scenarioTitle(state.inputs));
   }
-  function copyText(text, okMsg) {
+  function escHtml(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  // linkText: when given, the clipboard also gets a clickable link (title -> url) for apps that paste formatted text.
+  function copyText(text, okMsg, linkText) {
     var fb = $("copy-fallback"), ta = $("copy-fallback-text");
     function fallback() {
       fb.hidden = false;
@@ -619,7 +614,16 @@
       showMsg("Your browser blocked copying. The text is selected below; copy it with Ctrl+C or Cmd+C.", "err");
     }
     try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
+      if (linkText && navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+        var html = '<a href="' + escHtml(text) + '">' + escHtml(linkText) + "</a>";
+        var item = new ClipboardItem({
+          "text/plain": new Blob([text], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" })
+        });
+        navigator.clipboard.write([item]).then(function () { fb.hidden = true; showMsg(okMsg, "ok"); }, function () {
+          navigator.clipboard.writeText(text).then(function () { fb.hidden = true; showMsg(okMsg, "ok"); }, fallback);
+        });
+      } else if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(text).then(function () { fb.hidden = true; showMsg(okMsg, "ok"); }, fallback);
       } else fallback();
     } catch (err) { fallback(); }
