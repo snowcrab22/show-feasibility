@@ -555,7 +555,7 @@
     Object.keys(BYT).forEach(function (key) { B.range(BYT[key], C[key], r0, rN); });
     B.signCF("$" + L$("net") + "$" + r0 + ":$" + L$("net") + "$" + rN);
     B.cf.push({ ref: "$A$" + r0 + ":$" + L$("note") + "$" + rN, kind: "rowMark", noteCol: L$("note"), first: r0 });
-    B.chart = { headerRow: head, firstRow: r0, lastRow: rN, nCol: C.n, netCol: C.net };
+    B.chart = { headerRow: head, firstRow: r0, lastRow: rN, nCol: C.n, netCol: C.net, payCol: C.hlpay };
 
     // ---------- Price math (helper for the price grid and the break-even price)
     var P = buildPriceMath(inp, n, S, MAXR, M, sheets);
@@ -1395,7 +1395,8 @@
           if (i < rows.length) { start = prev = rows[i]; }
         }
       });
-      if (sh.chart) out.chart = { sheet: sh.name, headerRow: sh.chart.headerRow - 1, lastRow: sh.chart.lastRow, nCol: sh.chart.nCol - 1, netCol: sh.chart.netCol - 1 };
+      if (sh.chart) out.chart = { sheet: sh.name, headerRow: sh.chart.headerRow - 1, lastRow: sh.chart.lastRow, nCol: sh.chart.nCol - 1, netCol: sh.chart.netCol - 1,
+        payCol: sh.chart.payCol ? sh.chart.payCol - 1 : null };
     });
     return out;
   }

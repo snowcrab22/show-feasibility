@@ -446,7 +446,7 @@
     });
     try { localStorage.setItem(SECTION_KEY, name); } catch (e) { /* storage unavailable */ }
     hideTip();
-    if (name === "overview" && last) { renderChart(last); renderMoneyBar(last.r); }
+    if (name === "overview" && last) { renderChart(last); renderPayChart(last); renderMoneyBar(last.r); }
     if (name === "share") { preloadExcel(); if (googleReady()) G.preload(); } // fetch libraries before the tap
     // If the page is scrolled past the nav, bring the top of the new section under the sticky bar.
     if (changed && !opts.initial) {
@@ -568,10 +568,11 @@
       showMsg("Reset to the default scenario.", "ok");
     });
     if (window.ResizeObserver) {
-      var ro = new ResizeObserver(function () { if (last && current === "overview") { renderChart(last); renderMoneyBar(last.r); } });
+      var ro = new ResizeObserver(function () { if (last && current === "overview") { renderChart(last); renderPayChart(last); renderMoneyBar(last.r); } });
       ro.observe($("chart-wrap"));
+      ro.observe($("pay-wrap"));
     } else {
-      window.addEventListener("resize", function () { if (last && current === "overview") { renderChart(last); renderMoneyBar(last.r); } });
+      window.addEventListener("resize", function () { if (last && current === "overview") { renderChart(last); renderPayChart(last); renderMoneyBar(last.r); } });
     }
     window.addEventListener("scroll", hideTip, { passive: true });
   }
@@ -1013,7 +1014,7 @@
     applyVisibility();
     renderVerdict(last);
     renderTiles(last);
-    if (current === "overview" || !current) { renderChart(last); }
+    if (current === "overview" || !current) { renderChart(last); renderPayChart(last); }
     renderMoney(r);
     renderHeatmap(inp);
     renderScenarios(last);
@@ -1199,6 +1200,142 @@
     wrap.appendChild(root);
     if (hadFocus) root.focus({ preventScroll: true });
     $("chart-sub").textContent = b.be === null ? "Can't break even at this price, even sold out" : "Break-even at " + b.be + " of " + b.S + " tickets";
+  }
+
+  // ---------------------------------------------------------------- headliner pay chart
+  // First ticket count where the pay cap binds (only when the cap sits above the guarantee).
+  function payCapPoint(b) {
+    var inp = b.inp, g = b.r.headliner.guarantee;
+    if (!inp.hlCapOn || !(inp.hlCap > g)) return null;
+    var cap = inp.hlCap;
+    for (var i = 0; i < b.sw.length; i++) if (b.sw[i].pay >= cap - 0.005) return { n: b.sw[i].n, cap: cap };
+    return null;
+  }
+  var payHover = null;
+  function renderPayChart(b) {
+    var wrap = $("pay-wrap"), card = $("pay-card");
+    if (!wrap) return;
+    var sw = b.sw;
+    var anyPay = sw.some(function (p) { return p.pay > 0.005; });
+    card.hidden = !anyPay;
+    if (!anyPay) { wrap.textContent = ""; return; }
+    var W = Math.max(280, wrap.clientWidth || 640), H = W < 480 ? 240 : 290;
+    var m = { l: W < 480 ? 52 : 64, r: 16, t: 30, b: 44 };
+    var S = Math.max(1, b.S);
+    var vals = [];
+    sw.forEach(function (p) { vals.push(p.pay, p.net); });
+    var lo = Math.min(0, Math.min.apply(null, vals)), hi = Math.max(0, Math.max.apply(null, vals));
+    if (hi - lo < 1) { hi += 50; lo -= 50; }
+    var step = niceStep((hi - lo) / 4);
+    lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+    var maxAbs = Math.max(Math.abs(lo), Math.abs(hi));
+    function X(n) { return m.l + n / S * (W - m.l - m.r); }
+    function Y(v) { return m.t + (hi - v) / (hi - lo) * (H - m.t - m.b); }
+    var capPt = payCapPoint(b), r = b.r;
+
+    var root = svg("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, tabindex: "0", role: "img",
+      "aria-label": "Line chart of headliner pay and our net for every ticket count from 0 to " + b.S + ". " +
+        "Headliner pay is " + fmt$(sw[0].pay) + " at 0 tickets and " + fmt$(sw[sw.length - 1].pay) + " sold out" +
+        (capPt ? ", reaching the " + fmt$(capPt.cap) + " cap at " + capPt.n + " tickets. " : ". ") +
+        "At " + r.n + " tickets, headliner pay is " + fmt$(r.headliner.pay) + " and our net is " + fmt$(r.net) + ". Use arrow keys to inspect." });
+    var ax = svg("g", { "class": "ax" });
+    for (var v = lo; v <= hi + step / 2; v += step) {
+      var y = Y(v);
+      if (Math.abs(v) > step / 1000) ax.appendChild(svg("line", { "class": "gridline", x1: m.l, x2: W - m.r, y1: y, y2: y }));
+      ax.appendChild(svg("text", { x: m.l - 8, y: y + 4, "text-anchor": "end" }, yTickLabel(v, maxAbs)));
+    }
+    var xs = niceStep(S / (W < 480 ? 4 : 7));
+    for (var n = 0; n <= S; n += xs) {
+      ax.appendChild(svg("text", { x: X(n), y: H - m.b + 18, "text-anchor": "middle" }, String(Math.round(n))));
+    }
+    if (S % xs !== 0 && X(S) - X(Math.floor(S / xs) * xs) > 28) ax.appendChild(svg("text", { x: X(S), y: H - m.b + 18, "text-anchor": "middle" }, String(S)));
+    ax.appendChild(svg("text", { x: (m.l + W - m.r) / 2, y: H - 6, "text-anchor": "middle" }, "Tickets sold"));
+    root.appendChild(ax);
+    root.appendChild(svg("line", { "class": "zeroline", x1: m.l, x2: W - m.r, y1: Y(0), y2: Y(0) }));
+
+    function path(key) { return sw.map(function (p, i) { return (i ? "L" : "M") + X(p.n).toFixed(1) + " " + Y(p[key]).toFixed(1); }).join(" "); }
+    root.appendChild(svg("path", { "class": "series", d: path("net") }));
+    root.appendChild(svg("path", { "class": "series s-pay", d: path("pay") }));
+
+    var beX = null;
+    if (b.be !== null) {
+      beX = X(b.be);
+      root.appendChild(svg("line", { "class": "be-line", x1: beX, x2: beX, y1: m.t - 6, y2: H - m.b }));
+      var anchor = beX > W - 120 ? "end" : beX < m.l + 60 ? "start" : "middle";
+      root.appendChild(svg("text", { "class": "chart-label", x: beX + (anchor === "end" ? -4 : anchor === "start" ? 4 : 0), y: m.t - 10, "text-anchor": anchor }, "Break-even " + b.be));
+    }
+    if (capPt) {
+      var cx0 = X(capPt.n);
+      root.appendChild(svg("line", { "class": "cap-line", x1: cx0, x2: cx0, y1: m.t - 6, y2: H - m.b }));
+      // Bottom of the plot: net climbs with tickets, so the lower right is clear and the top stays free for break-even.
+      var ca = cx0 > W - 120 ? "end" : "start";
+      root.appendChild(svg("text", { "class": "chart-label", x: cx0 + (ca === "end" ? -4 : 4), y: H - m.b - 8, "text-anchor": ca },
+        (W < 480 ? "Cap at " : "Cap " + fmt$(capPt.cap) + " at ") + capPt.n));
+    }
+    var cn = r.n, px = X(cn), py = Y(r.headliner.pay);
+    root.appendChild(svg("circle", { "class": "marker", cx: px, cy: Y(r.net), r: 4 }));
+    root.appendChild(svg("circle", { "class": "marker s-pay", cx: px, cy: py, r: 5 }));
+    var lab = "Pay " + fmt$(r.headliner.pay) + " at " + cn;
+    var la = px > W - 160 ? "end" : "start";
+    var ly = py - 12;
+    if (ly < m.t + 10) ly = py + 20;
+    root.appendChild(svg("text", { "class": "chart-label strong", x: px + (la === "end" ? -10 : 10), y: ly, "text-anchor": la }, lab));
+
+    var cross = svg("g", { style: "display:none" });
+    var cl = svg("line", { "class": "cross", y1: m.t, y2: H - m.b });
+    var dNet = svg("circle", { "class": "marker", r: 4 });
+    var dPay = svg("circle", { "class": "marker s-pay", r: 4.5 });
+    cross.appendChild(cl); cross.appendChild(dNet); cross.appendChild(dPay);
+    root.appendChild(cross);
+    var hit = svg("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent", style: "cursor:crosshair" });
+    root.appendChild(hit);
+
+    function showAt(k, clientX, clientY) {
+      k = clamp(k, 0, b.S);
+      payHover = k;
+      var p = sw[k];
+      cross.style.display = "";
+      cl.setAttribute("x1", X(k)); cl.setAttribute("x2", X(k));
+      dNet.setAttribute("cx", X(k)); dNet.setAttribute("cy", Y(p.net));
+      dPay.setAttribute("cx", X(k)); dPay.setAttribute("cy", Y(p.pay));
+      var rows = [
+        { text: "Headliner " + fmt$(p.pay) + (p.capped ? " (capped)" : ""), strong: true, key: "var(--s2)" },
+        { text: "Our net " + fmt$(p.net), key: "var(--s1)" },
+        { text: k + " tickets (" + fmtPct(k / S) + " of sellable)" }
+      ];
+      if (clientX === undefined) {
+        var rc = root.getBoundingClientRect(), sc = rc.width / W;
+        clientX = rc.left + X(k) * sc; clientY = rc.top + Y(p.pay) * sc;
+      }
+      showTip(rows, clientX, clientY);
+    }
+    function nFromEvent(e) {
+      var rc = root.getBoundingClientRect();
+      var x = (e.clientX - rc.left) * (W / rc.width);
+      return Math.round((x - m.l) / (W - m.l - m.r) * S);
+    }
+    function clear() { cross.style.display = "none"; hideTip(); payHover = null; }
+    hit.addEventListener("pointermove", function (e) { showAt(nFromEvent(e), e.clientX, e.clientY); });
+    hit.addEventListener("pointerleave", clear);
+    hit.addEventListener("click", function (e) { setN(clamp(nFromEvent(e), 0, b.S)); });
+    root.addEventListener("keydown", function (e) {
+      var cur = payHover === null ? r.n : payHover;
+      var stepK = e.shiftKey ? 10 : 1;
+      if (e.key === "ArrowRight" || e.key === "ArrowUp") { e.preventDefault(); showAt(cur + stepK); }
+      else if (e.key === "ArrowLeft" || e.key === "ArrowDown") { e.preventDefault(); showAt(cur - stepK); }
+      else if (e.key === "Home") { e.preventDefault(); showAt(0); }
+      else if (e.key === "End") { e.preventDefault(); showAt(b.S); }
+      else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setN(cur); var s2 = wrap.querySelector("svg"); if (s2) s2.focus(); }
+      else if (e.key === "Escape") clear();
+    });
+    root.addEventListener("blur", clear);
+
+    var hadFocus = document.activeElement && wrap.contains(document.activeElement);
+    wrap.textContent = "";
+    wrap.appendChild(root);
+    if (hadFocus) root.focus({ preventScroll: true });
+    $("pay-sub").textContent = fmt$(sw[0].pay) + " at 0 tickets, " + fmt$(sw[sw.length - 1].pay) + " sold out" +
+      (capPt ? "; cap reached at " + capPt.n + " tickets" : "");
   }
 
   // ---------------------------------------------------------------- money
