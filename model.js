@@ -571,7 +571,10 @@
     var inp = sanitize(inputs);
     var hlBE = headlinerBreakEven(inp);
     var out = [];
-    for (var n = 0; n <= sellable(inp); n++) out.push({ n: n, net: computeCore(inp, n, hlBE).net });
+    for (var n = 0; n <= sellable(inp); n++) {
+      var c = computeCore(inp, n, hlBE);
+      out.push({ n: n, net: c.net, pay: c.headliner.pay, capped: c.headliner.capped });
+    }
     return out;
   }
 

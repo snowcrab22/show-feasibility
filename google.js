@@ -56,7 +56,7 @@
     };
   }
   // Sheets API requests that finish an uploaded workbook: a warning-only lock on every tab except
-  // the yellow input cells, and a profit-vs-tickets chart on its own tab.
+  // the yellow input cells, and a profit and headliner pay vs tickets chart on its own tab.
   // deco comes from ShowWorkbook.decorations(sheets); sheetIds maps tab title -> sheetId.
   function sheetsRequests(deco, sheetIds) {
     var reqs = [];
@@ -75,14 +75,16 @@
       var src = function (col) {
         return { sourceRange: { sources: [{ sheetId: sheetIds[c.sheet], startRowIndex: c.headerRow, endRowIndex: c.lastRow, startColumnIndex: col, endColumnIndex: col + 1 }] } };
       };
+      var series = [{ series: src(c.netCol), targetAxis: "LEFT_AXIS", color: { red: 0.165, green: 0.471, blue: 0.839 } }];
+      if (c.payCol != null) series.push({ series: src(c.payCol), targetAxis: "LEFT_AXIS", color: { red: 0.922, green: 0.408, blue: 0.204 } });
       reqs.push({ addChart: { chart: {
         spec: {
-          title: "Profit by tickets sold",
+          title: c.payCol != null ? "Profit and headliner pay by tickets sold" : "Profit by tickets sold",
           basicChart: {
-            chartType: "LINE", legendPosition: "NO_LEGEND", headerCount: 1,
-            axis: [{ position: "BOTTOM_AXIS", title: "Tickets sold" }, { position: "LEFT_AXIS", title: "Net (profit or loss)" }],
+            chartType: "LINE", legendPosition: c.payCol != null ? "BOTTOM_LEGEND" : "NO_LEGEND", headerCount: 1,
+            axis: [{ position: "BOTTOM_AXIS", title: "Tickets sold" }, { position: "LEFT_AXIS", title: "Dollars" }],
             domains: [{ domain: src(c.nCol) }],
-            series: [{ series: src(c.netCol), targetAxis: "LEFT_AXIS" }]
+            series: series
           }
         },
         position: { newSheet: true }

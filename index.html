@@ -298,6 +298,13 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; ma
 .be-line { stroke: var(--ink-2); stroke-width: 1; }
 .cross { stroke: var(--ink-2); stroke-width: 1; }
 .chart-caption { font-size: 12px; color: var(--ink-2); margin-top: 8px; }
+.series.s-pay { stroke: var(--s2); stroke-width: 2.5; }
+.marker.s-pay { fill: var(--s2); }
+.cap-line { stroke: var(--s2); stroke-width: 1; stroke-dasharray: 4 3; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--ink-2); margin: 2px 0 8px; }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chart-legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; background: var(--s1); }
+.chart-legend i.k-pay { background: var(--s2); }
 
 .tip {
   position: fixed; z-index: 20; pointer-events: none; background: var(--panel); color: var(--ink);
@@ -534,6 +541,17 @@ td.neg .mdetail { color: var(--crit-text); }
             <tbody></tbody>
           </table>
         </div>
+      </div>
+    </div>
+    <div class="ov-grid" id="pay-card">
+      <div class="card">
+        <div class="card-head">
+          <h3>Headliner pay vs tickets sold</h3>
+          <span class="card-sub" id="pay-sub"></span>
+        </div>
+        <div class="chart-legend" aria-hidden="true"><span><i class="k-pay"></i>Headliner pay (deal + backend)</span><span><i></i>Our net</span></div>
+        <div class="chart-wrap" id="pay-wrap"></div>
+        <p class="chart-caption">Travel and hospitality aren't in headliner pay; they're in our costs. Hover or use the arrow keys to read any ticket count; click or press Enter to set it as tickets sold.</p>
       </div>
     </div>
     <div class="ov-grid">
