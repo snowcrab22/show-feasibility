@@ -669,7 +669,6 @@
     sheets.talent = T;
     topBlock(T, "Talent", ctx);
     heading(T, "Headliner payout at the chosen count");
-    T.add([null, fx('"Deal: "&DealText&". Change the deal on Inputs."', "Deal: " + X.hlDescription(inp) + ". Change the deal on Inputs.", "text", "muted", { span: 3, wrap: true })]);
     function trow(label, f, val, extra, s) { return T.add([null, txt(label, s || "label", { indent: s ? undefined : 1 }), fx(f, val, "money", s || "label", extra)]); }
     trow("Guarantee", 'IF(HLGuaranteeOn="On",HLGuarantee,0)', guaranteeAmt, { name: "GuaranteeAmt" });
     trow("% of ticket sales part", idx("ByT_PctPart"), h.pctPart);
@@ -700,16 +699,6 @@
     T.add([null, txt("% part threshold (tickets)", "label"), fx(startF("HLPctStart", "HLPctStartN", "HLBreakEven"), pctThr, "int", "work", { name: "PctThreshold" })]);
     T.add([null, txt("$ per ticket part threshold (tickets)", "label"), fx(startF("HLPerTicketStart", "HLPerTicketStartN", "HLBreakEven"), ptThr, "int", "work", { name: "PerTicketThreshold" })]);
     T.add([null, txt("% basis at the threshold", "label"), fx("IF(PctThreshold>0,INDEX(ByT_HLBasis,MIN(PctThreshold,Sellable)+1),0)", pctBasisAtStart, "money", "work", { name: "PctBasisAtStart" })]);
-    // Deal wording, mirroring export.hlDescription()
-    var startTxt = function (s, nN) { return "IF(" + s + "=" + str(START_LABEL.first) + ',"from ticket 1",IF(' + s + "=" + str(START_LABEL.breakEven) + ',"after break-even","after "&ROUND(' + nN + ',0)&" tickets"))'; };
-    var basisShort = "IF(HLPctBasis=" + str(BASIS_LABEL.grossFace) + "," + str(X.HL_BASIS_SHORT.grossFace) + ",IF(HLPctBasis=" + str(BASIS_LABEL.net) + "," + str(X.HL_BASIS_SHORT.net) + "," + str(X.HL_BASIS_SHORT.faceNet) + "))";
-    T.add([null, txt("Deal wording: guarantee", "label"), fx('IF(HLGuaranteeOn="On",' + moneyText("HLGuarantee", false) + '&" guarantee","")', "", "text", "work", { name: "DealG" })]);
-    T.add([null, txt("Deal wording: %", "label"), fx('IF(HLPctOn="On",ROUND(HLPct*100,6)&"% of "&' + basisShort + '&" "&' + startTxt("HLPctStart", "HLPctStartN") + ',"")', "", "text", "work", { name: "DealP" })]);
-    T.add([null, txt("Deal wording: $ per ticket", "label"), fx('IF(HLPerTicketOn="On",' + moneyTextAuto("HLPerTicket") + '&"/ticket "&' + startTxt("HLPerTicketStart", "HLPerTicketStartN") + ',"")', "", "text", "work", { name: "DealT" })]);
-    T.add([null, txt("Deal wording: joined", "label"), fx('MID(IF(DealG<>"",DealSep&DealG,"")&IF(DealP<>"",DealSep&DealP,"")&IF(DealT<>"",DealSep&DealT,""),LEN(DealSep)+1,1000)', "", "text", "work", { name: "DealJ" })]);
-    T.add([null, txt("Deal wording: separator", "label"), fx('IF(HLVersus="Yes"," vs "," + ")', inp.hlVersus ? " vs " : " + ", "text", "work", { name: "DealSep" })]);
-    T.add([null, txt("Deal", "label"), fx('IF(DealJ&IF(HLBackendOn="On","x","")="","no pay set",DealJ&IF(HLBackendOn="On",IF(DealJ<>""," + ","")&ROUND(HLBackendPct*100,6)&"% backend","")&IF(HLCapOn="On",", capped at "&' + moneyText(CAP_AMT, false) + ',""))',
-      X.hlDescription(inp), "text", "work", { name: "DealText" })]);
 
     // ---------- Tickets & fees
     var Tk = new Sheet("Tickets & fees", [2, 56, 18, 10], LIGHT.s1);
@@ -904,8 +893,22 @@
     Of.add([null, ylabel("AGENCY"), cell("", "text", "input", { name: "OfferAgency", span: 2 }), null, ylabel("CAPACITY"), fx("CapEff", inp.capacity, "int", "label", { bold: true, align: "left" })]);
     Of.add([]);
     bar(Of, "02   DEAL", 7);
-    Of.add([null, ylabel("GUARANTEE"), fx("GuaranteeAmt", guaranteeAmt, "money", "label", { bold: true, color: PINK, size: 14, align: "left" })]);
-    Of.add([null, ylabel("DEAL"), fx("DealText", X.hlDescription(inp), "text", "label", { bold: true, fill: PINKW, span: 6, wrap: true })]);
+    // The deal as numbers: "–" means that part is off.
+    var basisShort = "IF(HLPctBasis=" + str(BASIS_LABEL.grossFace) + "," + str(X.HL_BASIS_SHORT.grossFace) + ",IF(HLPctBasis=" + str(BASIS_LABEL.net) + "," + str(X.HL_BASIS_SHORT.net) + "," + str(X.HL_BASIS_SHORT.faceNet) + "))";
+    var PCT_DASH = '0.0##%;-0.0##%;"–"';
+    function dealStart(onName, thrName, thr, name) {
+      return fx("IF(" + onName + '="On",IF(' + thrName + ">=" + NEVER + ',"never",' + thrName + '),"")', thr === null ? "" : thr >= NEVER ? "never" : thr,
+        "auto", "label", { bold: true, fmt: '#,##0" tickets"', align: "left", span: 2, name: name });
+    }
+    Of.add([null, ylabel("GUARANTEE"), fx("GuaranteeAmt", guaranteeAmt, "money", "label", { bold: true, color: PINK, size: 14, align: "left" }), null,
+      ylabel("PAY CAP"), fx('IF(HLCapOn="On",' + CAP_AMT + ",0)", inp.hlCapOn ? Math.max(inp.hlCap, guaranteeAmt) : 0, "money", "label", { bold: true, fmt: DASH, align: "left", span: 2, name: "OfferDealCap" })]);
+    Of.add([null, fx('"% OF "&UPPER(' + basisShort + ")", "% OF " + X.HL_BASIS_SHORT[inp.hlPctBasis].toUpperCase(), "text", "muted", { bold: true, wrap: true }),
+      fx('IF(HLPctOn="On",HLPct,0)', inp.hlPctOn ? inp.hlPct / 100 : 0, "pct", "label", { bold: true, fmt: PCT_DASH, align: "left", name: "OfferDealPct" }), null,
+      ylabel("STARTS AFTER"), dealStart("HLPctOn", "OfferPctThreshold", inp.hlPctOn ? oPctThr : null, "OfferDealPctStart")]);
+    Of.add([null, ylabel("$ PER TICKET"), fx('IF(HLPerTicketOn="On",HLPerTicket,0)', inp.hlPerTicketOn ? inp.hlPerTicket : 0, "money", "label", { bold: true, fmt: DASH, align: "left", name: "OfferDealPerTicket" }), null,
+      ylabel("STARTS AFTER"), dealStart("HLPerTicketOn", "OfferPerTicketThreshold", inp.hlPerTicketOn ? oPtThr : null, "OfferDealPerTicketStart")]);
+    Of.add([null, ylabel("BACKEND, % OF PROFIT"), fx('IF(HLBackendOn="On",HLBackendPct,0)', inp.hlBackendOn ? inp.hlBackendPct / 100 : 0, "pct", "label", { bold: true, fmt: PCT_DASH, align: "left", name: "OfferDealBackend" }), null,
+      ylabel("VERSUS DEAL"), fx("HLVersus", inp.hlVersus ? YES : NO, "text", "label", { bold: true, span: 2, name: "OfferDealVersus" })]);
     Of.add([null, ylabel("PROMOTER COVERS"), cell("Travel and hotel, and hospitality per rider", "text", "input", { name: "OfferCovers", span: 6 })]);
     Of.add([null, ylabel("FEE INCLUDES"), cell("Agency commission", "text", "input", { name: "OfferFeeIncludes", span: 6 })]);
     Of.add([null, ylabel("DEPOSIT"), cell("50% on signing; balance night of show", "text", "input", { name: "OfferDeposit", span: 6 })]);
