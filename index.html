@@ -242,6 +242,10 @@ select { padding-right: 28px; }
 
 .custom-list { display: grid; gap: 8px; }
 .custom-row { display: grid; grid-template-columns: 1fr 104px auto; gap: 6px; align-items: center; }
+.bonus-group.is-off #bonus-list, .bonus-group.is-off #btn-add-bonus { opacity: 0.5; }
+.bonus-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px 96px auto; gap: 6px; align-items: center; }
+.bonus-row .bonus-n[hidden] { display: flex; visibility: hidden; }
+.bonus-lines { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
 
 button {
   font: 500 14px var(--font-body); color: var(--ink); background: var(--panel);
@@ -298,6 +302,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; ma
 .be-line { stroke: var(--ink-2); stroke-width: 1; }
 .cross { stroke: var(--ink-2); stroke-width: 1; }
 .chart-caption { font-size: 12px; color: var(--ink-2); margin-top: 8px; }
+.chart-note { margin-top: 8px; font-size: 13px; font-weight: 600; color: var(--crit-text); }
 .series.s-pay { stroke: var(--s2); stroke-width: 2.5; }
 .marker.s-pay { fill: var(--s2); }
 .cap-line { stroke: var(--s2); stroke-width: 1; stroke-dasharray: 4 3; }
@@ -412,6 +417,7 @@ td.neg .mdetail { color: var(--crit-text); }
 .lrow .lval { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lrow.sub { color: var(--ink-2); font-size: 14px; }
 .lrow.sub > :first-child { padding-left: 16px; }
+.lrow.sub.of > :first-child { padding-left: 32px; }
 .lrow.subtotal { font-weight: 600; }
 .lrow.total { font-weight: 600; border-top: 1px solid var(--axis); padding-top: 6px; }
 .lrow.grand { font-size: 17px; }
@@ -437,6 +443,7 @@ td.neg .mdetail { color: var(--crit-text); }
   .lrow.crew { grid-template-columns: minmax(0, 1fr) 96px; row-gap: 4px; }
   .lrow.crew .crew-inputs { grid-column: 1 / -1; grid-row: 2; padding-left: 28px; }
   .custom-list .custom-row { grid-template-columns: minmax(0, 1fr) 96px auto; }
+  .bonus-row { grid-template-columns: minmax(0, 1fr) 64px 88px auto; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -530,6 +537,7 @@ td.neg .mdetail { color: var(--crit-text); }
           <span class="card-sub" id="chart-sub"></span>
         </div>
         <div class="chart-wrap" id="chart-wrap"></div>
+        <p class="chart-note" id="chart-dip" hidden></p>
         <p class="chart-caption">Hover or use the arrow keys on the chart to read any ticket count; click or press Enter to set it as tickets sold.</p>
       </div>
       <div class="card">
@@ -684,6 +692,10 @@ td.neg .mdetail { color: var(--crit-text); }
           <div class="card-head"><h3>Offer vs your numbers</h3><span class="card-sub" id="offer-sub"></span></div>
           <table id="offer-table"><caption class="sr-only">Offer compared with your real numbers</caption>
             <thead><tr><th scope="col"></th><th scope="col" class="num">Yours</th><th scope="col" class="num">Offer</th></tr></thead><tbody></tbody></table>
+          <div id="offer-bonuses" hidden>
+            <p class="group-sub">Ticket bonuses in the deal</p>
+            <ul class="bonus-lines" id="offer-bonus-list"></ul>
+          </div>
           <div class="share-row"><button type="button" id="btn-copy-offer-link">Copy offer link</button></div>
           <p class="hint">The offer link opens the padded numbers as a scenario of their own. The Excel export includes an Offer tab laid out like the KC PLUR offer sheet, plus a true budget and a padded budget.</p>
         </div>
@@ -768,10 +780,10 @@ td.neg .mdetail { color: var(--crit-text); }
 </main>
 <div class="tip" id="tip" role="presentation"></div>
 
-<script src="model.js?v=8"></script>
-<script src="export.js?v=10"></script>
-<script src="workbook.js?v=6"></script>
+<script src="model.js?v=9"></script>
+<script src="export.js?v=11"></script>
+<script src="workbook.js?v=7"></script>
 <script src="team.js?v=2"></script>
-<script src="app.js?v=15"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>
