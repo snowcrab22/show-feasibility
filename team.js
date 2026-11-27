@@ -18,7 +18,7 @@
 })(this, function (X) {
   "use strict";
 
-  var SCRIPT_URL = ""; // the web app's /exec URL; the team features stay hidden until it is set
+  var SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzy4p_nI0r5_mPoP9rFrTIKJgALu5ndq2ABOlD0V2f8aD9QW3ZWRn0RbAeUyHGzVgs/exec"; // the web app's /exec URL; the team features stay hidden until it is set
   var TEAM = ["Quentin", "Jasmine", "Chad", "CJ"];
   var AUTH_KEY = "kcplur-show-feasibility-team";
   var APP = "show-feasibility";
