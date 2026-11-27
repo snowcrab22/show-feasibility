@@ -35,6 +35,8 @@
   var START_LABEL = { first: "From ticket 1", breakEven: "After break-even", afterN: "After N tickets" };
   var BASIS_LABEL = { grossFace: "Gross face", faceNet: "Face net of sales tax", net: "Our net ticket revenue" };
   var TAX_LABEL = { ontop: "Added on top", included: "Included in price" };
+  var TRIGGER_LABEL = { tickets: "N tickets", pct: "% sold", sellout: "Sell out" };
+  var BONUS_SLOTS = 5; // = model MAX_BONUSES
   var FEE_LABEL = { pass: "Passed to buyer", absorb: "Absorbed by us" };
   var CUT_LABEL = X.CUT_SHORT; // afterTax, afterTaxFees, gross
   var NEVER = 1000000000; // threshold stand-in for "never reached"
@@ -64,7 +66,7 @@
   }
   function txt(v, s, extra) { return cell(v, "text", s, extra); }
   function fx(f, v, t, s, extra) { var c = cell(v, t, s, extra); c.f = f; return c; }
-  function choice(list) { return { type: "list", list: list }; }
+  function choice(list, blank) { return { type: "list", list: list, blank: !!blank }; }
   function str(s) { return '"' + String(s).replace(/"/g, '""') + '"'; }
 
   function onOff(b) { return b ? ON : OFF; }
@@ -153,9 +155,23 @@
     return { on: r.counts.online, door: r.counts.door, card: r.counts.doorCard, fnT: r.faceNet, gf: r.grossFace, absT: r.eventbrite.absorbed,
       dpT: r.doorProc, cb: r.doorCutBasis, cut: r.doorCut, ph: r.venue.perHead, ntr: r.netTicketRevenue, hb: basisValue(r, inp.hlPctBasis) };
   }
+  // Ticket bonuses at count N: each slot pays its amount once N reaches BonusAt_i (NEVER when off or blank).
+  function bonusF(N) {
+    var t = [];
+    for (var i = 1; i <= BONUS_SLOTS; i++) t.push("IF(" + N + ">=BonusAt_" + i + ",N(Bonus_" + i + "_Amount),0)");
+    return t.join("+");
+  }
+  // Deal pay before ticket bonuses: guarantee plus the parts, or the versus amount.
+  function preBonusF(pct, pt) { return 'IF(HLVersus="Yes",MAX(GuaranteeAmt,' + pct + "+" + pt + "),GuaranteeAmt+" + pct + "+" + pt + ")"; }
+  // Ticket count a bonus slot pays from (blank trigger: blank).
+  function paysFromF(i) {
+    var T = "Bonus_" + i + "_Trigger", num = "N(Bonus_" + i + "_Number)";
+    return "IF(" + T + '="","",IF(' + T + "=" + str(TRIGGER_LABEL.tickets) + ",ROUND(MAX(0," + num + "),0),IF(" + T + "=" + str(TRIGGER_LABEL.pct) +
+      ",ROUNDUP(ROUND(Sellable*MIN(100,MAX(0," + num + "))/100,9),0),Sellable)))";
+  }
   // Headliner and profit at count N from a ticket-side block, mirroring computeCore().
-  var DEAL_KEYS = ["pct", "pt", "deal", "nbb", "backend", "net", "ok"];
-  var DEAL_LABEL = { pct: "% part", pt: "$ per ticket part", deal: "Deal pay", nbb: "Net before backend", backend: "Backend", net: "Net", ok: "Breaks even (1)" };
+  var DEAL_KEYS = ["pct", "pt", "bonus", "deal", "nbb", "backend", "net", "ok"];
+  var DEAL_LABEL = { pct: "% part", pt: "$ per ticket part", bonus: "Ticket bonuses", deal: "Deal pay", nbb: "Net before backend", backend: "Backend", net: "Net", ok: "Breaks even (1)" };
   // Headliner pay cap: deal pay and backend together never above MAX(HLCap, guarantee).
   var CAP_AMT = "MAX(HLCap,GuaranteeAmt)";
   function capDeal(f) { return "IF(HLCapOn=\"On\",MIN(" + CAP_AMT + "," + f + ")," + f + ")"; }
@@ -164,7 +180,8 @@
     return {
       pct: "IF(AND(HLPctOn=\"On\"," + N + ">" + pctThr + "),MAX(0," + R("hb") + "-" + hbThr + ")*HLPct,0)",
       pt: "IF(HLPerTicketOn=\"On\",MAX(0," + N + "-" + ptThr + ")*HLPerTicket,0)",
-      deal: capDeal("IF(HLVersus=\"Yes\",MAX(GuaranteeAmt," + R("pct") + "+" + R("pt") + "),GuaranteeAmt+" + R("pct") + "+" + R("pt") + ")"),
+      bonus: bonusF(N),
+      deal: capDeal(preBonusF(R("pct"), R("pt")) + "+" + R("bonus")),
       nbb: R("ntr") + "+OtherIncome-FixedTotal-(" + R("deal") + "-GuaranteeAmt)",
       backend: capBackend("IF(HLBackendOn=\"On\",MAX(0," + R("nbb") + ")*HLBackendPct,0)", R("deal")),
       net: R("nbb") + "-" + R("backend"),
@@ -173,7 +190,7 @@
   }
   function dealValues(r) {
     var h = r.headliner;
-    return { pct: h.pctPart, pt: h.perTicketPart, deal: h.dealPay, nbb: r.netBeforeBackend, backend: h.backend, net: r.net, ok: r.net >= -1e-9 ? 1 : 0 };
+    return { pct: h.pctPart, pt: h.perTicketPart, bonus: h.bonusPart, deal: h.dealPay, nbb: r.netBeforeBackend, backend: h.backend, net: r.net, ok: r.net >= -1e-9 ? 1 : 0 };
   }
 
   function topBlock(sh, title, ctx, titleCell) {
@@ -293,10 +310,25 @@
     inRow("$ per ticket sold", yMoney(inp.hlPerTicket, "HLPerTicket"), yOn(inp.hlPerTicketOn, "HLPerTicketOn"));
     inRow("$ per ticket starts", yChoice(START_LABEL[inp.hlPerTicketStart], "HLPerTicketStart", vals(START_LABEL)));
     inRow("$ per ticket starts after how many tickets", yInt(inp.hlPerTicketStartN, "HLPerTicketStartN"));
+    inRow("Ticket bonuses", null, yOn(inp.hlBonusOn, "HLBonusOn"), "Each pays its whole amount once tickets sold reach its trigger; they add up.");
+    I.add([null, txt("Bonus trigger", "subhead"), txt("Amount", "subhead", { align: "right" }), txt("Number", "subhead", { align: "right" }), txt("Pays from", "subhead")]);
+    for (var bi = 1; bi <= BONUS_SLOTS; bi++) {
+      var brow = inp.hlBonuses[bi - 1], bR = I.next();
+      // Number: 0 or more, and above 1 for % sold, so "80%" typed in (stored as 0.8) is refused. Same-row
+      // cell refs (trigger in B, number in D) rather than names, which Google Sheets' rules may not resolve.
+      var numRule = "AND($D$" + bR + ">=0,OR($B$" + bR + "<>" + str(TRIGGER_LABEL.pct) + ",$D$" + bR + ">1))";
+      I.add([null, cell(brow ? TRIGGER_LABEL[brow.trigger] : "", "text", "input", { name: "Bonus_" + bi + "_Trigger", dv: choice(vals(TRIGGER_LABEL), true) }),
+        cell(brow ? brow.amount : null, "money", "input", { name: "Bonus_" + bi + "_Amount", dv: { type: "min0" } }),
+        cell(brow ? brow.n : null, "auto", "input", { name: "Bonus_" + bi + "_Number", fmt: "General", dv: { type: "custom", formula: numRule, title: "Number",
+          error: "Enter 0 or more. For " + TRIGGER_LABEL.pct + ", type the percent as a plain number: 80 for 80%." } }),
+        fx(paysFromF(bi), brow ? M.bonusAt(brow, S) : "", "auto", "muted", { name: "Bonus_" + bi + "_PaysFrom", fmt: '#,##0" tickets"', align: "left" })]);
+    }
+    I.add([null, txt("Number is the ticket count for " + TRIGGER_LABEL.tickets + ", or the percent of sellable tickets for " + TRIGGER_LABEL.pct +
+      " (80 = 80%). " + TRIGGER_LABEL.sellout + " needs none. Blank rows are there to add bonuses.", "muted", { span: 4, wrap: true })]);
     inRow("Backend: % of profit after break-even", yPct(inp.hlBackendPct, "HLBackendPct"), yOn(inp.hlBackendOn, "HLBackendOn"));
     inRow("Versus: pay the greater of the guarantee or the % and per-ticket parts",
-      cell(inp.hlVersus ? YES : NO, "text", "input", { name: "HLVersus", dv: choice([YES, NO]), align: "center" }), null, "Backend is still added on top.");
-    inRow("Cap total pay at", yMoney(inp.hlCap, "HLCap"), yOn(inp.hlCapOn, "HLCapOn"), "Guarantee, %, per ticket and backend together. Never below the guarantee.");
+      cell(inp.hlVersus ? YES : NO, "text", "input", { name: "HLVersus", dv: choice([YES, NO]), align: "center" }), null, "Ticket bonuses and backend are still added on top.");
+    inRow("Cap total pay at", yMoney(inp.hlCap, "HLCap"), yOn(inp.hlCapOn, "HLCapOn"), "Guarantee, %, per ticket, ticket bonuses and backend together. Never below the guarantee.");
     inRow("Travel / hotel", yMoney(inp.hlTravel, "HLTravel"));
     inRow("Hospitality / rider", yMoney(inp.hlHospitality, "HLHospitality"));
     I.add([]);
@@ -391,7 +423,7 @@
       ["hlPctBasis", "HLPctBasis", BASIS_LABEL], ["hlPctStart", "HLPctStart", START_LABEL], ["hlPctStartN", "HLPctStartN", "int"],
       ["hlPerTicketOn", "HLPerTicketOn", "bool"], ["hlPerTicket", "HLPerTicket", "money"], ["hlPerTicketStart", "HLPerTicketStart", START_LABEL],
       ["hlPerTicketStartN", "HLPerTicketStartN", "int"], ["hlBackendOn", "HLBackendOn", "bool"], ["hlBackendPct", "HLBackendPct", "pct"], ["hlVersus", "HLVersus", "yes"],
-      ["hlCapOn", "HLCapOn", "bool"], ["hlCap", "HLCap", "money"],
+      ["hlCapOn", "HLCapOn", "bool"], ["hlCap", "HLCap", "money"], ["hlBonusOn", "HLBonusOn", "bool"],
       ["hlTravel", "HLTravel", "money"], ["hlHospitality", "HLHospitality", "money"], ["supportSlots", "SupportSlots", "int"], ["supportPrice", "SupportPrice", "money"],
       ["vjOn", "VJOn", "bool"], ["vj", "VJFee", "money"], ["ldOn", "LDOn", "bool"], ["ld", "LDFee", "money"], ["soundTechsOn", "SoundTechsOn", "bool"], ["soundTechs", "SoundTechs", "int"],
       ["soundTechPay", "SoundTechPay", "money"], ["stagehandsOn", "StagehandsOn", "bool"], ["stagehands", "Stagehands", "int"], ["stagehandPay", "StagehandPay", "money"],
@@ -417,6 +449,12 @@
       return "IF(AND(" + nm + '="",' + am + '=""),"","&c' + (i + 1) + '="&' + urlEnc(nm + '&""') + '&"~"&ROUND(N(' + am + "),2))";
     });
     for (var ci2 = 0; ci2 < custParts.length; ci2 += 8) linkParts.push(custParts.slice(ci2, ci2 + 8).join("&")); // keeps each formula well under Excel's 8,192 characters
+    var bonusParts = [];
+    for (var bq = 1; bq <= BONUS_SLOTS; bq++) {
+      var bt = "Bonus_" + bq + "_Trigger";
+      bonusParts.push("IF(" + bt + '="","","&b' + bq + '="&' + enumF(bt, TRIGGER_LABEL) + '&"~"&ROUND(N(Bonus_' + bq + '_Number),6)&"~"&ROUND(N(Bonus_' + bq + "_Amount),2))");
+    }
+    linkParts.push(bonusParts.join("&"));
     var offerParts = X.OFFER_ROWS.map(function (o) {
       var nm = "Offer_" + o.key;
       return "IF(" + nm + '="","","&o_' + o.key + '="&ROUND(N(' + nm + "),2))";
@@ -475,6 +513,7 @@
       ["basis", "Headliner % basis", 13, "work", "money"],
       ["pctPart", "% part", 11, "work", "money"],
       ["ptPart", "$ per ticket part", 11, "work", "money"],
+      ["bonus", "Ticket bonuses", 11, "work", "money"],
       ["deal", "Deal pay", 11, "work", "money"],
       ["nbb", "Net before backend", 14, "work", "money"],
       ["backend", "Backend", 11, "work", "money"],
@@ -494,7 +533,7 @@
       fx("MIN(MAX(ROUND(TicketsSold,0),0),Sellable)", n, "int", "total", { name: "ChosenN" }), txt("From Tickets sold on Inputs.", "muted", { span: 4 })]);
     B.add([txt("Results", "band", { span: 9 }), null, null, null, null, null, null, null, null, null,
       txt("Ticket side", "band", { span: 13, fill: "#ecebe6" }), null, null, null, null, null, null, null, null, null, null, null, null,
-      txt("Headliner and profit", "band", { span: 10 })]);
+      txt("Headliner and profit", "band", { span: 11 })]);
     var head = B.add(COLS.map(function (c) {
       if (c[0] === "gap") return null;
       if (c[0] === "fees") return fx(platF("", " fees"), pn + " fees", "text", "colhead", { wrap: true, align: "right" });
@@ -540,7 +579,8 @@
         basis: fx(g('IF(HLPctBasis="' + BASIS_LABEL.grossFace + '",' + ref("gross") + ',IF(HLPctBasis="' + BASIS_LABEL.net + '",' + ref("ntr") + "," + ref("faceNet") + "))"), v(basis), "money", "work"),
         pctPart: fx(g('IF(AND(HLPctOn="On",' + ref("n") + ">PctThreshold),MAX(0," + ref("basis") + "-PctBasisAtStart)*HLPct,0)"), v(x && x.headliner.pctPart), "money", "work"),
         ptPart: fx(g('IF(HLPerTicketOn="On",MAX(0,' + ref("n") + "-PerTicketThreshold)*HLPerTicket,0)"), v(x && x.headliner.perTicketPart), "money", "work"),
-        deal: fx(g(capDeal('IF(HLVersus="Yes",MAX(GuaranteeAmt,' + ref("pctPart") + "+" + ref("ptPart") + "),GuaranteeAmt+" + ref("pctPart") + "+" + ref("ptPart") + ")")), v(x && x.headliner.dealPay), "money", "work"),
+        bonus: fx(g(bonusF(ref("n"))), v(x && x.headliner.bonusPart), "money", "work"),
+        deal: fx(g(capDeal(preBonusF(ref("pctPart"), ref("ptPart")) + "+" + ref("bonus"))), v(x && x.headliner.dealPay), "money", "work"),
         nbb: fx(g(ref("ntr") + "+OtherIncome-FixedTotal-(" + ref("deal") + "-GuaranteeAmt)"), v(x && x.netBeforeBackend), "money", "work"),
         backend: fx(g(capBackend('IF(HLBackendOn="On",MAX(0,' + ref("nbb") + ")*HLBackendPct,0)", ref("deal"))), v(x && x.headliner.backend), "money", "work"),
         baseFlag: fx(g("IF(" + ref("base") + ">=-" + EPS + ",1,0)"), v(base >= -1e-9 ? 1 : 0), "int", "work"),
@@ -554,7 +594,7 @@
       n: "ByT_Tickets", online: "ByT_Online", door: "ByT_Door", paid: "ByT_BuyersPaid", ntr: "ByT_NTR", hlpay: "ByT_HLPay", costs: "ByT_TotalCosts", net: "ByT_Net",
       doorCard: "ByT_DoorCard", gross: "ByT_GrossFace", faceNet: "ByT_FaceNet", tax: "ByT_Tax", fees: "ByT_Fees", passed: "ByT_FeesPassed", absorbed: "ByT_FeesAbsorbed",
       doorProc: "ByT_DoorProc", cutBasis: "ByT_CutBasis", doorCut: "ByT_DoorCut", perHead: "ByT_PerHead", paidOn: "ByT_PaidOnline", paidDoor: "ByT_PaidDoor",
-      basis: "ByT_HLBasis", pctPart: "ByT_PctPart", ptPart: "ByT_PerTicketPart", deal: "ByT_DealPay", backend: "ByT_Backend", baseFlag: "ByT_BaseFlag", netFlag: "ByT_NetFlag", offerFlag: "ByT_OfferFlag"
+      basis: "ByT_HLBasis", pctPart: "ByT_PctPart", ptPart: "ByT_PerTicketPart", bonus: "ByT_Bonus", deal: "ByT_DealPay", backend: "ByT_Backend", baseFlag: "ByT_BaseFlag", netFlag: "ByT_NetFlag", offerFlag: "ByT_OfferFlag"
     };
     Object.keys(BYT).forEach(function (key) { B.range(BYT[key], C[key], r0, rN); });
     B.signCF("$" + L$("net") + "$" + r0 + ":$" + L$("net") + "$" + rN);
@@ -575,6 +615,8 @@
     function group(title) { Co.add([null, txt(title, "subhead", { span: 2 })]); }
     group("Talent");
     line("Headliner pay", "HLPayAtCount", h.pay);
+    Co.add([null, txt("Ticket bonuses (part of headliner pay)", "muted", { indent: 2 }),
+      fx(idx("ByT_DealPay") + "-" + capDeal(preBonusF(idx("ByT_PctPart"), idx("ByT_PerTicketPart"))), h.bonusPaid, "money", "muted", { name: "BonusAmt" })]);
     line("Headliner travel / hotel and hospitality", "HLTravel+HLHospitality", L.headlinerTravel + L.headlinerHospitality);
     line("Supporting artists (slots x price per slot)", "SupportSlots*SupportPrice", L.support, "SupportAmt");
     sub("Talent subtotal", "HLPayAtCount+HLTravel+HLHospitality+SupportAmt", talentTotal);
@@ -683,7 +725,8 @@
     trow("Guarantee", 'IF(HLGuaranteeOn="On",HLGuarantee,0)', guaranteeAmt, { name: "GuaranteeAmt" });
     trow("% of ticket sales part", idx("ByT_PctPart"), h.pctPart);
     trow("$ per ticket part", idx("ByT_PerTicketPart"), h.perTicketPart);
-    trow("Deal pay (versus takes the greater of the guarantee or the parts above)", idx("ByT_DealPay"), h.dealPay);
+    trow("Ticket bonuses", idx("ByT_Bonus"), h.bonusPart);
+    trow("Deal pay (versus takes the greater of the guarantee or the % and per-ticket parts; ticket bonuses on top)", idx("ByT_DealPay"), h.dealPay);
     trow("Backend (% of profit)", idx("ByT_Backend"), h.backend);
     trow("Headliner pay", idx("ByT_HLPay"), h.pay, { name: "HLPayAtCount" }, "subtotal");
     trow("Travel / hotel", "HLTravel", h.travel);
@@ -708,6 +751,11 @@
     T.add([null, txt("% part threshold (tickets)", "label"), fx(startF("HLPctStart", "HLPctStartN", "HLBreakEven"), pctThr, "int", "work", { name: "PctThreshold" })]);
     T.add([null, txt("$ per ticket part threshold (tickets)", "label"), fx(startF("HLPerTicketStart", "HLPerTicketStartN", "HLBreakEven"), ptThr, "int", "work", { name: "PerTicketThreshold" })]);
     T.add([null, txt("% basis at the threshold", "label"), fx("IF(PctThreshold>0,INDEX(ByT_HLBasis,MIN(PctThreshold,Sellable)+1),0)", pctBasisAtStart, "money", "work", { name: "PctBasisAtStart" })]);
+    for (var ba = 1; ba <= BONUS_SLOTS; ba++) {
+      var bRow = inp.hlBonuses[ba - 1];
+      T.add([null, txt("Ticket bonus " + ba + " pays from (tickets)", "label"), fx('IF(AND(HLBonusOn="On",Bonus_' + ba + '_Trigger<>""),Bonus_' + ba + "_PaysFrom," + NEVER + ")",
+        inp.hlBonusOn && bRow ? M.bonusAt(bRow, S) : NEVER, "int", "work", { name: "BonusAt_" + ba })]);
+    }
 
     // ---------- Tickets & fees
     var Tk = new Sheet("Tickets & fees", [2, 56, 18, 10], LIGHT.s1);
@@ -918,6 +966,19 @@
       ylabel("STARTS AFTER"), dealStart("HLPerTicketOn", "OfferPerTicketThreshold", inp.hlPerTicketOn ? oPtThr : null, "OfferDealPerTicketStart")]);
     Of.add([null, ylabel("BACKEND, % OF PROFIT"), fx('IF(HLBackendOn="On",HLBackendPct,0)', inp.hlBackendOn ? inp.hlBackendPct / 100 : 0, "pct", "label", { bold: true, fmt: PCT_DASH, align: "left", name: "OfferDealBackend" }), null,
       ylabel("VERSUS DEAL"), fx("HLVersus", inp.hlVersus ? YES : NO, "text", "label", { bold: true, span: 2, name: "OfferDealVersus" })]);
+    // Ticket bonuses: one row per slot, blank when the slot is empty or bonuses are off.
+    for (var ob2 = 1; ob2 <= BONUS_SLOTS; ob2++) {
+      var oRow = inp.hlBonusOn ? inp.hlBonuses[ob2 - 1] : null, T2 = "Bonus_" + ob2 + "_Trigger";
+      var used = 'AND(HLBonusOn="On",' + T2 + '<>"")';
+      var oLbl = !oRow ? "" : oRow.trigger === "pct" ? "BONUS AT " + oRow.n + "% SOLD" : oRow.trigger === "sellout" ? "SELLOUT BONUS" : "TICKET BONUS";
+      Of.add([null,
+        fx("IF(" + used + ",IF(" + T2 + "=" + str(TRIGGER_LABEL.pct) + ',"BONUS AT "&ROUND(MIN(100,MAX(0,N(Bonus_' + ob2 + '_Number))),6)&"% SOLD",IF(' + T2 + "=" + str(TRIGGER_LABEL.sellout) +
+          ',"SELLOUT BONUS","TICKET BONUS")),"")', oLbl, "text", "muted", { bold: true, name: "OfferDealBonus_" + ob2 + "_Label" }),
+        fx("IF(" + used + ",N(Bonus_" + ob2 + '_Amount),"")', oRow ? oRow.amount : "", "money", "label", { bold: true, align: "left", name: "OfferDealBonus_" + ob2 + "_Amount" }), null,
+        fx("IF(" + used + ',"PAYS AT","")', oRow ? "PAYS AT" : "", "text", "muted", { bold: true }),
+        fx("IF(" + used + ",Bonus_" + ob2 + '_PaysFrom,"")', oRow ? M.bonusAt(oRow, S) : "", "auto", "label",
+          { bold: true, fmt: '#,##0" tickets"', align: "left", span: 2, name: "OfferDealBonus_" + ob2 + "_At" })]);
+    }
     Of.add([null, ylabel("PROMOTER COVERS"), cell("Travel and hotel, and hospitality per rider", "text", "input", { name: "OfferCovers", span: 6 })]);
     Of.add([null, ylabel("FEE INCLUDES"), cell("Agency commission", "text", "input", { name: "OfferFeeIncludes", span: 6 })]);
     Of.add([null, ylabel("DEPOSIT"), cell("50% on signing; balance night of show", "text", "input", { name: "OfferDeposit", span: 6 })]);
@@ -1006,7 +1067,9 @@
       var p = "Offer" + sfx + "_";
       wrow(label + ": % part", 'IF(AND(HLPctOn="On",' + N + ">OfferPctThreshold),MAX(0,INDEX(ByT_HLBasis," + N + "+1)-OfferPctBasisAtStart)*HLPct,0)", res.headliner.pctPart, p + "Pct");
       wrow(label + ": $ per ticket part", 'IF(HLPerTicketOn="On",MAX(0,' + N + "-OfferPerTicketThreshold)*HLPerTicket,0)", res.headliner.perTicketPart, p + "PT");
-      wrow(label + ": deal pay", capDeal('IF(HLVersus="Yes",MAX(GuaranteeAmt,' + p + "Pct+" + p + "PT),GuaranteeAmt+" + p + "Pct+" + p + "PT)"), res.headliner.dealPay, p + "Deal");
+      wrow(label + ": ticket bonuses", bonusF(N), res.headliner.bonusPart, p + "Bonus");
+      wrow(label + ": deal pay", capDeal(preBonusF(p + "Pct", p + "PT") + "+" + p + "Bonus"), res.headliner.dealPay, p + "Deal");
+      wrow(label + ": ticket bonuses paid (under the cap)", p + "Deal-" + capDeal(preBonusF(p + "Pct", p + "PT")), res.headliner.bonusPaid, p + "BonusPaid");
       wrow(label + ": net before backend", "INDEX(ByT_NTR," + N + "+1)+OtherIncome-OfferFixedTotal-(" + p + "Deal-GuaranteeAmt)", res.netBeforeBackend, p + "NBB");
       wrow(label + ": backend", capBackend('IF(HLBackendOn="On",MAX(0,' + p + "NBB)*HLBackendPct,0)", p + "Deal"), res.headliner.backend, p + "Backend");
       wrow(label + ": headliner pay", p + "Deal+" + p + "Backend", res.headliner.pay, "OfferPayAt" + sfx);
@@ -1047,14 +1110,15 @@
       var hl = showNm || "Headliner", ven = String(inp.venueName || "").trim() || "Venue";
       var A = off ? { travel: "OfferTravelAmt", hosp: "OfferHospAmt", sup: "OfferSupportAmt", vj: "OfferVJAmt", ld: "OfferLDAmt", st: "OfferSoundTechsAmt", sh: "OfferStagehandsAmt", sec: "OfferSecurityAmt",
                       snd: "OfferSoundAmt", gear: "OfferGearAmt", photo: "OfferPhotoAmt", ads: "OfferAdsAmt", poster: "OfferPosterAmt", ins: "OfferInsuranceAmt", rent: "OfferVenueRentalAmt",
-                      cont: "OfferContingency", pay: "OfferPayAtCount" }
+                      cont: "OfferContingency", pay: "OfferPayAtCount", bonus: "OfferCount_BonusPaid" }
                   : { travel: "HLTravel", hosp: "HLHospitality", sup: "SupportAmt", vj: "VJAmt", ld: "LDAmt", st: "SoundTechsAmt", sh: "StagehandsAmt", sec: "SecurityAmt",
                       snd: "SoundAmt", gear: "GearAmt", photo: "PhotoAmt", ads: "AdsAmt", poster: "PosterAmt", ins: "InsuranceAmt", rent: "VenueRentalAmt",
-                      cont: "Contingency", pay: "HLPayAtCount" };
+                      cont: "Contingency", pay: "HLPayAtCount", bonus: "BonusAmt" };
       var C2 = res.costs;
       var lines = [
         [hl, "Headliner guarantee", "GuaranteeAmt", guaranteeAmt, ""],
-        [hl, "Headliner bonus at this count", A.pay + "-GuaranteeAmt", res.headliner.pay - guaranteeAmt, X.hlDescription(inp)],
+        [hl, "Headliner bonus at this count", A.pay + "-GuaranteeAmt-" + A.bonus, res.headliner.pay - guaranteeAmt - res.headliner.bonusPaid, X.hlDescription(inp)],
+        [hl, "Ticket bonuses", A.bonus, res.headliner.bonusPaid, ""],
         [hl, "Travel / hotel", A.travel, C2.headlinerTravel, ""],
         [hl, "Hospitality / rider", A.hosp, C2.headlinerHospitality, ""],
         [null, "Supporting artists", A.sup, C2.support, inp.supportSlots + " x " + X.fmt$(off ? offerInp.supportPrice : inp.supportPrice)],
@@ -1383,7 +1447,8 @@
 
   function validation(dv) {
     var base = { allowBlank: true, showErrorMessage: true, errorStyle: "stop" };
-    if (dv.type === "list") return Object.assign(base, { type: "list", allowBlank: false, formulae: ['"' + dv.list.join(",") + '"'], errorTitle: "Pick from the list", error: "Choose one of: " + dv.list.join(", ") });
+    if (dv.type === "custom") return Object.assign(base, { type: "custom", formulae: [dv.formula], errorTitle: dv.title, error: dv.error });
+    if (dv.type === "list") return Object.assign(base, { type: "list", allowBlank: !!dv.blank, formulae: ['"' + dv.list.join(",") + '"'], errorTitle: "Pick from the list", error: "Choose one of: " + dv.list.join(", ") });
     if (dv.type === "range") return Object.assign(base, { type: "whole", operator: "between", formulae: [dv.min, dv.max], errorTitle: "Out of range", error: "Enter a whole number from " + dv.min + " to " + dv.max + "." });
     if (dv.type === "int0") return Object.assign(base, { type: "whole", operator: "greaterThanOrEqual", formulae: [0], errorTitle: "Whole number", error: "Enter a whole number, 0 or more." });
     if (dv.type === "pct") { var mx = dv.max || 1; return Object.assign(base, { type: "decimal", operator: "between", formulae: [0, mx], errorTitle: "Percent", error: "Enter a percent from 0% to " + Math.round(mx * 100) + "%." }); }

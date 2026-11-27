@@ -34,6 +34,12 @@
  *  - Headliner cap (hlCapOn): deal pay and backend together never exceed
  *    max(hlCap, guarantee); the deal fills the cap first, the backend gets the rest.
  *    Travel and hospitality sit outside the cap.
+ *  - Ticket bonuses (hlBonusOn, up to 5 rows): each row pays its whole amount once tickets
+ *    sold >= its trigger count; rows add up. Trigger counts: N tickets = n; % sold =
+ *    ceil(sellable x n / 100) after rounding to 9 places (80% of 245 is 196); sell out =
+ *    sellable. Deal pay = guarantee + % + $/ticket (or the versus amount) + bonuses, then the
+ *    cap: guarantee, % and $/ticket fill it first, then bonuses, then the backend. Bonuses are
+ *    variable parts: not in the contingency base or headlinerBreakEven.
  *  - Old saved scenarios: a missing venueRentalOn means "on if venueRental > 0";
  *    a missing door % toggle means on; a missing platform preset is detected from
  *    the three platform rates. Only missing keys are migrated, so sanitize is
@@ -101,6 +107,8 @@
     hlVersus: false,
     hlCapOn: false,           // cap on everything the deal pays (never below the guarantee)
     hlCap: 1500,
+    hlBonusOn: false,         // ticket bonuses
+    hlBonuses: [],            // [{ trigger: "tickets"|"pct"|"sellout", n, amount }], at most MAX_BONUSES
     hlTravel: 90,
     hlHospitality: 50,
     // Lineup
@@ -148,6 +156,8 @@
   // Ticket count the slider starts at for the default scenario.
   var DEFAULT_N = 105;
 
+  var MAX_BONUSES = 5;
+
   var ENUMS = {
     taxMode: ["included", "ontop"],
     ebMode: ["pass", "absorb"],
@@ -156,17 +166,19 @@
     hlPctBasis: ["grossFace", "faceNet", "net"],
     hlPctStart: ["first", "breakEven", "afterN"],
     hlPerTicketStart: ["first", "breakEven", "afterN"],
-    hlPreset: ["flat", "pct", "perTicket", "flatBackend", "flatBonus", "versus", "custom"]
+    hlPreset: ["flat", "pct", "perTicket", "flatBackend", "flatBonus", "ticketBonus", "versus", "custom"],
+    bonusTrigger: ["tickets", "pct", "sellout"]
   };
 
   // Toggle sets each preset applies. Presets only flip toggles/start points, never amounts.
   var PRESETS = {
-    flat:        { hlGuaranteeOn: true,  hlPctOn: false, hlPerTicketOn: false, hlBackendOn: false, hlVersus: false },
-    pct:         { hlGuaranteeOn: false, hlPctOn: true,  hlPerTicketOn: false, hlBackendOn: false, hlVersus: false, hlPctStart: "first" },
-    perTicket:   { hlGuaranteeOn: false, hlPctOn: false, hlPerTicketOn: true,  hlBackendOn: false, hlVersus: false, hlPerTicketStart: "first" },
-    flatBackend: { hlGuaranteeOn: true,  hlPctOn: false, hlPerTicketOn: false, hlBackendOn: true,  hlVersus: false },
-    flatBonus:   { hlGuaranteeOn: true,  hlPctOn: false, hlPerTicketOn: true,  hlBackendOn: false, hlVersus: false, hlPerTicketStart: "breakEven" },
-    versus:      { hlGuaranteeOn: true,  hlPctOn: true,  hlPerTicketOn: false, hlBackendOn: false, hlVersus: true,  hlPctStart: "first" }
+    flat:        { hlGuaranteeOn: true,  hlPctOn: false, hlPerTicketOn: false, hlBackendOn: false, hlVersus: false, hlBonusOn: false },
+    pct:         { hlGuaranteeOn: false, hlPctOn: true,  hlPerTicketOn: false, hlBackendOn: false, hlVersus: false, hlBonusOn: false, hlPctStart: "first" },
+    perTicket:   { hlGuaranteeOn: false, hlPctOn: false, hlPerTicketOn: true,  hlBackendOn: false, hlVersus: false, hlBonusOn: false, hlPerTicketStart: "first" },
+    flatBackend: { hlGuaranteeOn: true,  hlPctOn: false, hlPerTicketOn: false, hlBackendOn: true,  hlVersus: false, hlBonusOn: false },
+    flatBonus:   { hlGuaranteeOn: true,  hlPctOn: false, hlPerTicketOn: true,  hlBackendOn: false, hlVersus: false, hlBonusOn: false, hlPerTicketStart: "breakEven" },
+    ticketBonus: { hlGuaranteeOn: true,  hlPctOn: false, hlPerTicketOn: false, hlBackendOn: false, hlVersus: false, hlBonusOn: true },
+    versus:      { hlGuaranteeOn: true,  hlPctOn: true,  hlPerTicketOn: false, hlBackendOn: false, hlVersus: true,  hlBonusOn: false, hlPctStart: "first" }
   };
 
   // Ticketing platform presets set the platform name and the three rates.
@@ -190,6 +202,16 @@
     return isFinite(x) ? x : d;
   }
 
+  // One ticket bonus row: a known trigger (else N tickets), a whole ticket count or a 0..100 percent, an amount >= 0.
+  function sanitizeBonus(r) {
+    r = r && typeof r === "object" ? r : {};
+    var trigger = ENUMS.bonusTrigger.indexOf(r.trigger) >= 0 ? r.trigger : "tickets";
+    var n = Math.max(0, num(r.n, 0));
+    if (trigger === "tickets") n = Math.round(n);
+    else if (trigger === "pct") n = Math.min(100, n);
+    return { trigger: trigger, n: n, amount: Math.max(0, num(r.amount, 0)) };
+  }
+
   // Merge any partial/untrusted object onto DEFAULTS, coercing types and whitelisting enums.
   function sanitize(raw) {
     var out = {};
@@ -204,6 +226,8 @@
               return { name: String(r.name == null ? "" : r.name).slice(0, 80), amount: Math.max(0, num(r.amount, 0)) };
             })
           : [];
+      } else if (k === "hlBonuses") {
+        out.hlBonuses = Array.isArray(v) ? v.slice(0, MAX_BONUSES).map(sanitizeBonus) : [];
       } else if (k === "offerAmounts") {
         out.offerAmounts = {};
         if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -240,6 +264,13 @@
   }
 
   function sellable(inp) { return Math.max(0, inp.capacity - inp.comps); }
+
+  // Ticket count a bonus row pays from, given S sellable tickets.
+  function bonusAt(b, S) {
+    if (b.trigger === "sellout") return S;
+    if (b.trigger === "pct") return Math.ceil(Math.round(S * b.n / 100 * 1e9) / 1e9);
+    return b.n;
+  }
 
   function expectedTickets(inp) { return Math.round(sellable(inp) * inp.expectedPct / 100); }
 
@@ -457,20 +488,28 @@
       perTicketThreshold = thresholdFor(inp.hlPerTicketStart, inp.hlPerTicketStartN, hlBE);
       perTicketPart = Math.max(0, n - perTicketThreshold) * inp.hlPerTicket;
     }
+    // Ticket bonuses: each row pays its whole amount once n reaches its trigger count.
+    var bonuses = [], bonusPart = 0;
+    if (inp.hlBonusOn) {
+      var S = sellable(inp);
+      bonuses = inp.hlBonuses.map(function (b) {
+        var at = bonusAt(b, S), reached = n >= at;
+        if (reached) bonusPart += b.amount;
+        return { trigger: b.trigger, n: b.n, amount: b.amount, at: at, reached: reached };
+      });
+    }
     var guarantee = fc.lines.headlinerGuarantee;
     var variable = pctPart + perTicketPart;
-    var dealPay, versusOverage = 0;
-    if (inp.hlVersus) {
-      dealPay = Math.max(guarantee, variable);
-      versusOverage = dealPay - guarantee;
-    } else {
-      dealPay = guarantee + variable;
-    }
-    // Pay cap: covers the deal and the backend, never below the guarantee.
+    var preBonus = inp.hlVersus ? Math.max(guarantee, variable) : guarantee + variable;
+    var dealPay = preBonus + bonusPart;
+    // Pay cap: covers the deal, the bonuses and the backend, never below the guarantee.
+    // Guarantee, % and $/ticket fill it first, then the bonuses.
     var capEff = inp.hlCapOn ? Math.max(inp.hlCap, guarantee) : Infinity;
     var hlCapped = dealPay > capEff;
     if (hlCapped) dealPay = capEff;
-    if (inp.hlVersus) versusOverage = dealPay - guarantee;
+    var preBonusPaid = Math.min(preBonus, capEff);
+    var bonusPaid = dealPay - preBonusPaid;
+    var versusOverage = inp.hlVersus ? preBonusPaid - guarantee : 0;
     // Everything except the guarantee (already in fixed costs) that the deal adds
     var variableExtra = dealPay - guarantee;
 
@@ -540,6 +579,9 @@
         guarantee: guarantee,
         pctPart: pctPart,
         perTicketPart: perTicketPart,
+        bonusPart: bonusPart,
+        bonusPaid: bonusPaid,
+        bonuses: bonuses,
         versus: inp.hlVersus,
         versusOverage: versusOverage,
         dealPay: dealPay,
@@ -620,6 +662,8 @@
     detectPlatform: detectPlatform,
     sanitize: sanitize,
     sellable: sellable,
+    bonusAt: bonusAt,
+    MAX_BONUSES: MAX_BONUSES,
     expectedTickets: expectedTickets,
     detectPreset: detectPreset,
     compute: compute,

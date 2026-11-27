@@ -8,10 +8,12 @@
  * The live workbook itself is built in workbook.js.
  */
 (function (root, factory) {
-  var api = factory();
+  var M = root && root.ShowModel;
+  if (!M && typeof require === "function") M = require("./model.js");
+  var api = factory(M);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (typeof window !== "undefined") window.ShowExport = api;
-})(this, function () {
+})(this, function (Model) {
   "use strict";
 
   var PAGE_URL = "https://snowcrab22.github.io/show-feasibility/";
@@ -68,6 +70,8 @@
     hlVersus: false,
     hlCapOn: false,
     hlCap: 1500,
+    hlBonusOn: false,
+    hlBonuses: Object.freeze([]),
     hlTravel: 90,
     hlHospitality: 50,
     supportSlots: 3,
@@ -140,6 +144,7 @@
   // ---------------------------------------------------------------- input schema (rendered by app.js, listed by the export)
   var BASIS_HL = [["grossFace", "Gross face (tickets x price)"], ["faceNet", "Face net of sales tax"], ["net", "Our net ticket revenue"]];
   var START = [["first", "From ticket 1"], ["breakEven", "After break-even"], ["afterN", "After N tickets"]];
+  var TRIGGERS = [["tickets", "N tickets"], ["pct", "% sold"], ["sellout", "Sell out"]];
 
   // Input groups by section. host = id of the section's input column.
   var SECTIONS = [
@@ -194,7 +199,7 @@
       { k: "hlPreset", label: "Deal preset", type: "select", options: [
         ["flat", "Flat guarantee"], ["pct", "% of ticket sales"], ["perTicket", "$ per ticket"],
         ["flatBackend", "Flat + backend (% of profit)"],
-        ["flatBonus", "Flat + per-ticket bonus"],
+        ["flatBonus", "Flat + per-ticket bonus"], ["ticketBonus", "Guarantee + ticket bonuses"],
         ["versus", "Versus (guarantee or %)"], ["custom", "Custom"]
       ], hint: "A preset only sets the toggles below; amounts stay as typed." },
       { k: "hlGuarantee", toggle: "hlGuaranteeOn", label: "Guarantee (flat)", type: "money" },
@@ -209,11 +214,13 @@
         { k: "hlPerTicketStart", label: "Starts", type: "select", options: START, dependsOn: "hlPerTicketOn" },
         { k: "hlPerTicketStartN", label: "After how many tickets", type: "int", dependsOn: "hlPerTicketOn", showIf: function (s) { return s.hlPerTicketStart === "afterN"; } }
       ] },
+      { k: "hlBonuses", toggle: "hlBonusOn", type: "bonuses", label: "Ticket bonuses",
+        hint: "Each bonus pays its whole amount once tickets sold reach its trigger, and they add up. % sold and Sell out count sellable tickets. Up to 5." },
       { k: "hlBackendPct", toggle: "hlBackendOn", label: "Backend: % of profit after break-even", type: "pct", step: 1 },
       { k: "hlVersus", label: "Versus: pay the greater of the guarantee or the % and per-ticket parts", type: "check",
-        hint: "Backend is still added on top. Starting points apply only to tickets beyond them." },
+        hint: "Ticket bonuses and backend are still added on top. Starting points apply only to tickets beyond them." },
       { k: "hlCap", toggle: "hlCapOn", label: "Cap total pay at", type: "money",
-        hint: "Covers the guarantee, %, per-ticket and backend together. Never below the guarantee; travel and rider aren't included." }
+        hint: "Covers the guarantee, %, per-ticket, ticket bonuses and backend together. Never below the guarantee; travel and rider aren't included." }
     ] },
     { id: "g-hl-travel", host: "in-talent", title: "Headliner travel & hospitality", fields: [
       { pair: [
@@ -275,11 +282,37 @@
     { key: "insurance", label: "Event insurance", on: flag("insuranceOn"), mult: one },
     { key: "venueRental", label: "Venue flat rental / fee", on: flag("venueRentalOn"), mult: one }
   ];
-  var CONTINGENCY_HINT = "% of all other costs, not counting headliner %, per-ticket, versus or backend pay, the venue's % of door or the per-head fee.";
+  var CONTINGENCY_HINT = "% of all other costs, not counting headliner %, per-ticket, versus, ticket bonus or backend pay, the venue's % of door or the per-head fee.";
 
   // ---------------------------------------------------------------- shared wording
   var CUT_SHORT = { afterTax: "ticket sales after tax", afterTaxFees: "ticket sales after tax and fees", gross: "gross face incl. tax" };
   var HL_BASIS_SHORT = { grossFace: "gross face", faceNet: "face net of tax", net: "our net ticket revenue" };
+  // Ticket bonuses. b.at (on the model's computed rows) or S gives the ticket count a row pays from.
+  function bonusAmount(b, ascii) { return fmt$(b.amount, { cents: b.amount % 1 !== 0, ascii: ascii }); }
+  function ticketsText(n) { return fmtInt(n) + (n === 1 ? " ticket" : " tickets"); }
+  function bonusLabel(b, S) {
+    var at = b.at != null ? b.at : Model.bonusAt(b, S);
+    var when = b.trigger === "sellout" ? "sellout (" + ticketsText(at) + ")" : b.trigger === "pct" ? b.n + "% sold (" + ticketsText(at) + ")" : ticketsText(at);
+    return "Bonus: " + bonusAmount(b) + " at " + when;
+  }
+  function bonusShort(b) {
+    return bonusAmount(b, true) + " bonus at " + (b.trigger === "sellout" ? "sellout" : b.trigger === "pct" ? b.n + "% sold" : ticketsText(b.n));
+  }
+  // Ticket counts past show break-even where net is below $0 again, as "50–58, 100–125 and 145".
+  function bonusDipNote(b) {
+    if (!b.inp.hlBonusOn || b.be === null) return "";
+    var ranges = [], cur = null;
+    b.sw.forEach(function (p) {
+      var dip = p.n > b.be && p.net < -1e-9;
+      if (dip && !cur) ranges.push(cur = { from: p.n, to: p.n });
+      else if (dip) cur.to = p.n;
+      else cur = null;
+    });
+    if (!ranges.length) return "";
+    var parts = ranges.map(function (x) { return x.from === x.to ? String(x.from) : x.from + "–" + x.to; });
+    var list = parts.length > 1 ? parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1] : parts[0];
+    return "Net drops back below $0 at " + list + " tickets, where a ticket bonus kicks in.";
+  }
   function startText(start, N) { return start === "first" ? "from ticket 1" : start === "breakEven" ? "after break-even" : "after " + N + " tickets"; }
   function hlDescription(inp) {
     var parts = [];
@@ -288,6 +321,7 @@
     if (inp.hlPctOn) v.push(inp.hlPct + "% of " + HL_BASIS_SHORT[inp.hlPctBasis] + " " + startText(inp.hlPctStart, inp.hlPctStartN));
     if (inp.hlPerTicketOn) v.push(fmt$(inp.hlPerTicket, { cents: inp.hlPerTicket % 1 !== 0 }) + "/ticket " + startText(inp.hlPerTicketStart, inp.hlPerTicketStartN));
     var s = inp.hlVersus ? parts.concat(v).join(" vs ") : parts.concat(v).join(" + ");
+    if (inp.hlBonusOn) inp.hlBonuses.forEach(function (b) { s += (s ? " + " : "") + bonusShort(b); });
     if (inp.hlBackendOn) s += (s ? " + " : "") + inp.hlBackendPct + "% backend";
     if (s && inp.hlCapOn) s += ", capped at " + fmt$(Math.max(inp.hlCap, inp.hlGuaranteeOn ? inp.hlGuarantee : 0), { ascii: true });
     return s || "no pay set";
@@ -346,6 +380,7 @@
       if (h.pctPart) hsub.push("% part " + fmt$(h.pctPart));
       if (h.perTicketPart) hsub.push("per ticket " + fmt$(h.perTicketPart));
     }
+    if (h.bonusPart) hsub.push("ticket bonuses " + fmt$(h.bonusPart));
     if (h.backend) hsub.push("backend " + fmt$(h.backend));
     out.push(R("Headliner payout", h.pay, "money", "", { key: "hl", display: fmt$(h.pay), sub: (h.versus ? "Versus: " : "") + (hsub.join(", ") || "nothing owed at this count") }));
     out.push(R("Buyer pays at checkout (online)", r.buyerPaysOnline, "money", "", { key: "buyer", display: fmt$(r.buyerPaysOnline, { cents: true }),
@@ -484,7 +519,8 @@
     function beyond(th) { return th > 0 ? " beyond " + (isFinite(th) ? th + " tickets" : "break-even (never reached)") : ""; }
     if (inp.hlPctOn) out.push(R(inp.hlPct + "% of " + HL_BASIS_SHORT[inp.hlPctBasis] + beyond(h.pctThreshold), h.pctPart));
     if (inp.hlPerTicketOn) out.push(R(fmt$(inp.hlPerTicket, C) + " per ticket" + beyond(h.perTicketThreshold), h.perTicketPart));
-    if (inp.hlVersus) out.push(R("Versus: greater of guarantee or the parts above", h.dealPay, "money", "sub"));
+    if (inp.hlVersus) out.push(R("Versus: greater of guarantee or the parts above", h.dealPay - h.bonusPaid, "money", "sub"));
+    h.bonuses.forEach(function (b) { out.push(R(bonusLabel(b, r.sellable), b.reached ? b.amount : 0)); });
     if (inp.hlBackendOn) out.push(R(inp.hlBackendPct + "% backend of " + fmt$(Math.max(0, r.netBeforeBackend)) + " profit", h.backend));
     out.push(R("Headliner pay" + (h.capped ? " (capped)" : ""), h.pay, "money", "total"));
     out.push(R("Travel / hotel", h.travel, "money", "sub"));
@@ -566,7 +602,8 @@
   // Only inputs that differ from LINK_BASE; booleans are 1/0, percents are whole numbers (29 = 29%),
   // c<i>=name~amount are custom lines. ebPreset and hlPreset aren't sent: they're worked out again.
   // o_<key>=amount are offer overrides and x<i>=name~amount are offer-only lines.
-  var Q_SKIP = { ebPreset: 1, hlPreset: 1, custom: 1, offerAmounts: 1, offerExtra: 1 };
+  // b<i>=trigger~n~amount are ticket bonus rows.
+  var Q_SKIP = { ebPreset: 1, hlPreset: 1, custom: 1, offerAmounts: 1, offerExtra: 1, hlBonuses: 1 };
   function qEnc(s) {
     return String(s).replace(/%/g, "%25").replace(/&/g, "%26").replace(/#/g, "%23").replace(/=/g, "%3D")
       .replace(/~/g, "%7E").replace(/ /g, "%20").replace(/\+/g, "%2B").replace(/"/g, "%22");
@@ -583,21 +620,23 @@
       out += "&" + k + "=" + v;
     });
     inp.custom.forEach(function (c, i) { out += "&c" + (i + 1) + "=" + qEnc(c.name) + "~" + qNum(c.amount, 2); });
+    inp.hlBonuses.forEach(function (b, i) { out += "&b" + (i + 1) + "=" + b.trigger + "~" + qNum(b.n, 6) + "~" + qNum(b.amount, 2); });
     M.OFFER_KEYS.forEach(function (k) { if (k in inp.offerAmounts) out += "&o_" + k + "=" + qNum(inp.offerAmounts[k], 2); });
     inp.offerExtra.forEach(function (c, i) { out += "&x" + (i + 1) + "=" + qEnc(c.name) + "~" + qNum(c.amount, 2); });
     return PAGE_URL + "#q=" + out;
   }
   function decodeQuery(q, M) {
-    var obj = {}, custom = [], extra = [], offer = {}, n = 0;
+    var obj = {}, custom = [], extra = [], offer = {}, bonuses = [], n = 0;
     function line(list, idx, v) { var t = v.lastIndexOf("~"); list.push({ i: idx, name: t < 0 ? v : v.slice(0, t), amount: t < 0 ? 0 : parseFloat(v.slice(t + 1)) || 0 }); }
     q.split("&").forEach(function (part) {
       var i = part.indexOf("=");
       if (i < 1) return;
       var k = part.slice(0, i), v = part.slice(i + 1);
       try { v = decodeURIComponent(v); } catch (e) { /* keep as typed */ }
-      var cm = /^c(\d+)$/.exec(k), xm = /^x(\d+)$/.exec(k), om = /^o_(\w+)$/.exec(k);
+      var cm = /^c(\d+)$/.exec(k), xm = /^x(\d+)$/.exec(k), om = /^o_(\w+)$/.exec(k), bm = /^b(\d+)$/.exec(k);
       if (k === "n") n = Math.max(0, Math.round(+v) || 0);
       else if (cm) line(custom, +cm[1], v);
+      else if (bm) { var bp = v.split("~"); bonuses.push({ i: +bm[1], trigger: bp[0], n: parseFloat(bp[1]), amount: parseFloat(bp[2]) }); }
       else if (xm) line(extra, +xm[1], v);
       else if (om) offer[om[1]] = parseFloat(v);
       else if (Object.prototype.hasOwnProperty.call(M.DEFAULTS, k) && !Q_SKIP[k]) {
@@ -607,8 +646,8 @@
     });
     function byI(a, b) { return a.i - b.i; }
     function plain(c) { return { name: c.name, amount: c.amount }; }
-    custom.sort(byI); extra.sort(byI);
-    var raw = Object.assign({}, LINK_BASE, obj, { custom: custom.map(plain), offerExtra: extra.map(plain), offerAmounts: offer });
+    custom.sort(byI); extra.sort(byI); bonuses.sort(byI);
+    var raw = Object.assign({}, LINK_BASE, obj, { custom: custom.map(plain), offerExtra: extra.map(plain), offerAmounts: offer, hlBonuses: bonuses });
     delete raw.ebPreset; // sanitize works it out from the three rates
     var inp = M.sanitize(raw);
     inp.hlPreset = M.detectPreset(inp);
@@ -672,7 +711,7 @@
     fmt$: fmt$, fmtCompact: fmtCompact, fmtPct: fmtPct, fmtInt: fmtInt, statusOf: statusOf, STATUS_LABEL: STATUS_LABEL,
     priceText: priceText, platName: platName, platLabel: platLabel,
     SECTIONS: SECTIONS, LEDGER: LEDGER, CONTINGENCY_HINT: CONTINGENCY_HINT, CATS: CATS, catName: catName, catLabel: catLabel,
-    CUT_SHORT: CUT_SHORT, HL_BASIS_SHORT: HL_BASIS_SHORT, hlDescription: hlDescription, venueDescription: venueDescription, talentTotal: talentTotal,
+    CUT_SHORT: CUT_SHORT, HL_BASIS_SHORT: HL_BASIS_SHORT, hlDescription: hlDescription, TRIGGERS: TRIGGERS, bonusLabel: bonusLabel, bonusDipNote: bonusDipNote, venueDescription: venueDescription, talentTotal: talentTotal,
     // rows
     bundle: bundle, headlineRows: headlineRows, moneyRows: moneyRows, scenarioRows: scenarioRows, heatGrid: heatGrid, mixOklab: mixOklab, heatColor: heatColor,
     perTicketRows: perTicketRows, ticketMoneyRows: ticketMoneyRows, headlinerRows: headlinerRows, talentRows: talentRows, venueRows: venueRows,

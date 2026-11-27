@@ -119,6 +119,18 @@
       ]);
     }
 
+    if (f.type === "bonuses") {
+      var btg = makeInput({ k: f.toggle, type: "check" });
+      var bgroup = el("div", { className: "subgroup bonus-group" }, [
+        el("label", { className: "check", "for": btg.id }, [btg].concat(labelNodes(f.label))),
+        el("p", { className: "hint", id: "bonus-hint", text: f.hint }),
+        el("div", { className: "custom-list", id: "bonus-list" }),
+        el("div", {}, [el("button", { type: "button", className: "small", id: "btn-add-bonus", text: "Add bonus" })])
+      ]);
+      fieldRows.push({ row: bgroup, dependsOn: f.toggle });
+      return bgroup;
+    }
+
     var row;
     if (f.type === "check") {
       var cb = makeInput(f);
@@ -161,6 +173,39 @@
       ]));
     });
     // keep grid columns: the sr-only labels are absolutely positioned and take no cell
+  }
+
+  // Ticket bonus rows in the deal card: trigger, number (only when the trigger needs one), amount, Remove.
+  function renderBonusRows() {
+    var list = $("bonus-list");
+    list.textContent = "";
+    state.inputs.hlBonuses.forEach(function (b, i) {
+      var no = i + 1, trigId = "bonus-trigger-" + i, nId = "bonus-n-" + i, amtId = "bonus-amount-" + i;
+      var trig = el("select", { id: trigId, dataset: { bi: i, bf: "trigger" } });
+      X.TRIGGERS.forEach(function (o) { trig.appendChild(el("option", { value: o[0], text: o[1] })); });
+      trig.value = b.trigger;
+      var num = el("input", { type: "number", id: nId, min: "0", step: "1", inputmode: "decimal", dataset: { bi: i, bf: "n" } });
+      num.value = b.n;
+      var amt = el("input", { type: "number", id: amtId, min: "0", step: "50", inputmode: "decimal", dataset: { bi: i, bf: "amount" } });
+      amt.value = b.amount;
+      var rm = el("button", { type: "button", className: "small", id: "bonus-remove-" + i, dataset: { bremove: i }, "aria-label": "Remove bonus " + no, text: "Remove" });
+      list.appendChild(el("div", { className: "bonus-row" }, [
+        el("label", { className: "sr-only", "for": trigId, text: "Bonus " + no + " pays at" }), trig,
+        el("label", { className: "sr-only", "for": nId, id: nId + "-label" }),
+        el("div", { className: "input-wrap bonus-n" }, [num, el("span", { className: "unit", text: "%", "aria-hidden": "true" })]),
+        el("label", { className: "sr-only", "for": amtId, text: "Bonus " + no + " amount" }), unitWrap(amt, "money"), rm
+      ]));
+      setBonusTrigger(i, b.trigger);
+    });
+    $("btn-add-bonus").hidden = state.inputs.hlBonuses.length >= M.MAX_BONUSES;
+  }
+  // Show the number box only for N tickets and % sold, with a % unit for % sold. Toggled in place so focus stays.
+  function setBonusTrigger(i, trigger) {
+    var num = $("bonus-n-" + i), wrap = num.parentNode;
+    wrap.hidden = trigger === "sellout";
+    wrap.classList.toggle("post", trigger === "pct");
+    wrap.querySelector(".unit").hidden = trigger !== "pct";
+    $("bonus-n-" + i + "-label").textContent = "Bonus " + (i + 1) + (trigger === "pct" ? ": percent of sellable tickets sold" : ": tickets sold");
   }
 
   // ---------------------------------------------------------------- cost ledger
@@ -215,6 +260,7 @@
     var host = $("ledger");
     host.appendChild(lgroup("Talent", "talent", [
       lrow("sub", [el("span", { text: "Headliner pay" }), lval("led-hl-pay")]),
+      lrow("sub of", [el("span", { text: "Ticket bonuses (part of headliner pay)" }), lval("led-hl-bonus")]),
       lrow("sub", [el("span", { text: "Headliner travel / hotel and hospitality" }), lval("led-hl-extra")]),
       lrow("sub", [el("span", { id: "led-support-label", text: "Supporting artists" }), lval("led-support")])
     ], "led-talent"));
@@ -325,6 +371,10 @@
     ];
     var tb = $("offer-table").tBodies[0];
     tb.textContent = "";
+    var bl = $("offer-bonus-list");
+    bl.textContent = "";
+    r.headliner.bonuses.forEach(function (x) { bl.appendChild(el("li", { text: X.bonusLabel(x, b.S) })); });
+    $("offer-bonuses").hidden = !r.headliner.bonuses.length;
     rows.forEach(function (x) {
       tb.appendChild(el("tr", {}, [el("th", { scope: "row", text: x[0] }), el("td", { className: "num", text: x[1] }), el("td", { className: "num", text: x[2] })]));
     });
@@ -358,6 +408,7 @@
       else c.value = v;
     });
     renderCustomRows();
+    renderBonusRows();
     syncOffer();
   }
 
@@ -370,7 +421,7 @@
   }
 
   // ---------------------------------------------------------------- events
-  var HL_TOGGLES = ["hlGuaranteeOn", "hlPctOn", "hlPerTicketOn", "hlBackendOn", "hlVersus", "hlPctStart", "hlPerTicketStart"];
+  var HL_TOGGLES = ["hlGuaranteeOn", "hlPctOn", "hlPerTicketOn", "hlBackendOn", "hlVersus", "hlBonusOn", "hlPctStart", "hlPerTicketStart"];
   var PLATFORM_RATES = ["ebServicePct", "ebServiceFixed", "ebProcPct"];
 
   function onControl(e) {
@@ -385,6 +436,14 @@
       var oi = +t.dataset.oi;
       if (!state.inputs.offerExtra[oi]) return;
       state.inputs.offerExtra[oi][t.dataset.of] = t.dataset.of === "name" ? t.value : Math.max(0, parseNum(t.value));
+      recompute();
+      return;
+    }
+    if (t.dataset.bi !== undefined) {
+      var bi = +t.dataset.bi, bonus = state.inputs.hlBonuses[bi];
+      if (!bonus) return;
+      if (t.dataset.bf === "trigger") { bonus.trigger = t.value; setBonusTrigger(bi, t.value); }
+      else bonus[t.dataset.bf] = Math.max(0, parseNum(t.value));
       recompute();
       return;
     }
@@ -484,7 +543,7 @@
         return;
       }
       var d = e.target.dataset;
-      if (d && (d.k || d.ci !== undefined || d.ok || d.oi !== undefined)) onControl(e);
+      if (d && (d.k || d.ci !== undefined || d.bi !== undefined || d.ok || d.oi !== undefined)) onControl(e);
     });
     document.addEventListener("change", function (e) {
       if (e.target.tagName === "SELECT" || e.target.type === "checkbox") return; // handled on input
@@ -509,6 +568,23 @@
         state.inputs.custom.splice(idx, 1);
         renderCustomRows();
         var next = $("custom-name-" + Math.min(idx, state.inputs.custom.length - 1)) || $("btn-add-custom");
+        next.focus();
+        recompute();
+      }
+    });
+    $("in-talent").addEventListener("click", function (e) {
+      var t = e.target, list = state.inputs.hlBonuses;
+      if (t.id === "btn-add-bonus") {
+        if (list.length >= M.MAX_BONUSES) return;
+        list.push({ trigger: "tickets", n: 0, amount: 0 });
+        renderBonusRows();
+        $("bonus-trigger-" + (list.length - 1)).focus();
+        recompute();
+      } else if (t.dataset && t.dataset.bremove !== undefined) {
+        var idx = +t.dataset.bremove;
+        list.splice(idx, 1);
+        renderBonusRows();
+        var next = $("bonus-trigger-" + Math.min(idx, list.length - 1)) || $("btn-add-bonus");
         next.focus();
         recompute();
       }
@@ -1102,6 +1178,7 @@
     renderVerdict(last);
     renderTiles(last);
     if (current === "overview" || !current) { renderChart(last); renderPayChart(last); }
+    renderDipNote(last);
     renderMoney(r);
     renderHeatmap(inp);
     renderScenarios(last);
@@ -1287,6 +1364,13 @@
     wrap.appendChild(root);
     if (hadFocus) root.focus({ preventScroll: true });
     $("chart-sub").textContent = b.be === null ? "Can't break even at this price, even sold out" : "Break-even at " + b.be + " of " + b.S + " tickets";
+  }
+  // Note under the profit chart when a ticket bonus pulls net back below $0 after break-even.
+  // Outside renderChart: its pixel helper X() hides the module's X (ShowExport).
+  function renderDipNote(b) {
+    var dip = X.bonusDipNote(b);
+    $("chart-dip").textContent = dip;
+    $("chart-dip").hidden = !dip;
   }
 
   // ---------------------------------------------------------------- headliner pay chart
@@ -1614,6 +1698,7 @@
     }
     $("cost-sub").textContent = "At " + r.n + " tickets";
     set("led-hl-pay", h.pay);
+    set("led-hl-bonus", h.bonusPaid, inp.hlBonusOn);
     set("led-hl-extra", L.headlinerTravel + L.headlinerHospitality);
     $("led-support-label").textContent = "Supporting artists (" + inp.supportSlots + " x " + fmt$(inp.supportPrice) + ")";
     set("led-support", L.support);
