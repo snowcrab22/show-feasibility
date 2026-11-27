@@ -857,6 +857,8 @@
   function onHistory(btn) {
     var li = btn.closest("li"), id = btn.dataset.history, shown = li.querySelector(".saved-history");
     if (shown) { shown.remove(); btn.setAttribute("aria-expanded", "false"); return; }
+    if (btn.disabled) return;
+    btn.disabled = true; // a second click while loading would list the versions twice
     savedMsg("Loading history…");
     T.history(id).then(function (rep) {
       li.appendChild(el("ul", { className: "saved-history" }, rep.versions.map(function (v) {
@@ -867,7 +869,8 @@
       })));
       btn.setAttribute("aria-expanded", "true");
       savedMsg("");
-    }).catch(function (e) { teamError(e, function (t) { savedMsg(t, "err"); }, function () { onHistory(btn); }); });
+    }).catch(function (e) { teamError(e, function (t) { savedMsg(t, "err"); }, function () { onHistory(btn); }); })
+      .then(function () { btn.disabled = false; });
   }
   // Build the same workbook as the download; the team script turns it into a Google Sheet that anyone
   // with the link can edit, in the KC PLUR Drive.

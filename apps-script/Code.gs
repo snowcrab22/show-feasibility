@@ -21,9 +21,11 @@ var MAX_DATA = 45000, MAX_NAME = 120, MAX_WHO = 60;
 var LOCK_TRIES = 10, LOCK_SECONDS = 600;
 var ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
+// Header text compared without case or extra spaces, so "saved  By" still means Saved by.
+function headerText(h) { return String(h == null ? "" : h).trim().replace(/\s+/g, " ").toLowerCase(); }
 function keyForHeader(h) {
-  h = String(h == null ? "" : h).trim();
-  for (var i = 0; i < HEADERS.length; i++) if (HEADERS[i][0] === h) return HEADERS[i][1];
+  h = headerText(h);
+  for (var i = 0; i < HEADERS.length; i++) if (headerText(HEADERS[i][0]) === h) return HEADERS[i][1];
   return null;
 }
 function isDate(v) { return Object.prototype.toString.call(v) === "[object Date]"; }
@@ -57,8 +59,8 @@ function rowFromRecord(rec, headerRow) {
 }
 function missingHeaders(headerRow) {
   var have = {};
-  (headerRow || []).forEach(function (h) { have[String(h == null ? "" : h).trim()] = true; });
-  return HEADERS.map(function (h) { return h[0]; }).filter(function (h) { return !have[h]; });
+  (headerRow || []).forEach(function (h) { var k = keyForHeader(h); if (k) have[k] = true; });
+  return HEADERS.filter(function (h) { return !have[h[1]]; }).map(function (h) { return h[0]; });
 }
 
 // ------------------------------------------------------------------ list, history, versions
@@ -139,14 +141,20 @@ function newId(rand) {
 }
 
 // ------------------------------------------------------------------ passcode
-// cache: { get(key) -> string|null, put(key, value, seconds) }. After LOCK_TRIES wrong passcodes in
-// LOCK_SECONDS, everything is refused until the window passes.
-function checkPasscode(given, expected, cache) {
+// cache: { get(key) -> string|null, put(key, value, seconds) }. After LOCK_TRIES wrong passcodes within
+// LOCK_SECONDS of the first one, everything is refused until that window ends. The window is fixed
+// from its first wrong try ("count|firstMs"), so typos spread over an evening never add up.
+function checkPasscode(given, expected, cache, now) {
   if (expected == null || String(expected) === "") return "unset";
-  var tries = Number(cache.get("badTries")) || 0;
+  now = now == null ? Date.now() : now;
+  var parts = String(cache.get("badTries") || "").split("|");
+  var tries = Number(parts[0]) || 0, first = parts.length > 1 ? Number(parts[1]) || now : now;
+  if (now - first >= LOCK_SECONDS * 1000) { tries = 0; first = now; }
   if (tries >= LOCK_TRIES) return "locked";
   if (given != null && String(given) !== "" && String(given) === String(expected)) return null;
-  cache.put("badTries", String(tries + 1), LOCK_SECONDS);
+  if (!tries) first = now;
+  var left = Math.max(1, Math.ceil(LOCK_SECONDS - (now - first) / 1000));
+  cache.put("badTries", (tries + 1) + "|" + first, left);
   return "passcode";
 }
 
