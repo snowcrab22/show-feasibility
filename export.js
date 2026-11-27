@@ -74,6 +74,8 @@
     supportPrice: 75,
     vjOn: false,
     vj: 300,
+    ldOn: false,
+    ld: 300,
     soundTechsOn: false,
     soundTechs: 1,
     soundTechPay: 150,
@@ -219,12 +221,11 @@
         { k: "hlHospitality", label: "Hospitality / rider", type: "money" }
       ] }
     ] },
-    { id: "g-lineup", host: "in-talent", title: "Support & VJ", fields: [
+    { id: "g-lineup", host: "in-talent", title: "Support", fields: [
       { pair: [
         { k: "supportSlots", label: "Supporting slots", type: "int" },
         { k: "supportPrice", label: "Price per slot", type: "money" }
-      ] },
-      { k: "vj", toggle: "vjOn", label: "VJ", type: "money" }
+      ] }
     ] }
   ];
 
@@ -240,6 +241,10 @@
       { k: "sound", toggle: "soundOn", label: "Sound rental" },
       { k: "gear", toggle: "gearOn", label: "Additional deck / gear" },
       { k: "photo", label: "Photo / video" }
+    ] },
+    { id: "visual", title: "Visual production", rows: [
+      { k: "vj", toggle: "vjOn", label: "VJ" },
+      { k: "ld", toggle: "ldOn", label: "Lighting designer (LD)" }
     ] },
     { id: "marketing", title: "Marketing", rows: [
       { k: "ads", label: "Advertising budget" },
@@ -258,6 +263,7 @@
     { key: "hlHospitality", label: "Headliner hospitality / rider", on: always, mult: one },
     { key: "supportPrice", label: "Supporting artists, per slot", on: function (s) { return s.supportSlots > 0; }, mult: function (s) { return s.supportSlots; } },
     { key: "vj", label: "VJ", on: flag("vjOn"), mult: one },
+    { key: "ld", label: "Lighting designer (LD)", on: flag("ldOn"), mult: one },
     { key: "soundTechPay", label: "Sound techs, pay each", on: flag("soundTechsOn"), mult: function (s) { return s.soundTechs; } },
     { key: "stagehandPay", label: "Stagehands, pay each", on: flag("stagehandsOn"), mult: function (s) { return s.stagehands; } },
     { key: "security", label: "Contracted security", on: flag("securityOn"), mult: one },
@@ -293,7 +299,7 @@
     if (inp.venuePerHeadOn) parts.push(fmt$(inp.venuePerHead, { cents: inp.venuePerHead % 1 !== 0 }) + " per head");
     return parts.join(" + ") || "nothing";
   }
-  function talentTotal(r) { return r.headliner.total + r.costs.support + r.costs.vj; }
+  function talentTotal(r) { return r.headliner.total + r.costs.support; }
 
   // Everything the page shows for one scenario.
   function bundle(inputs, n, M) {
@@ -354,8 +360,8 @@
     { k: "doorProc", name: "Door card processing", detail: "", color: "var(--s2)", hex: LIGHT.s2 },
     { k: "venue", name: "Venue", detail: "% of door, rental, per-head", color: "var(--s3)", hex: LIGHT.s3 },
     { k: "headliner", name: "Headliner", detail: "pay, travel, rider", color: "var(--s4)", text: "#0b0b0b", hex: LIGHT.s4 },
-    { k: "supportVj", name: "Support + VJ", detail: "", color: "var(--s5)", hex: LIGHT.s5 },
-    { k: "production", name: "Production & labor", detail: "sound, security, gear, crew", color: "var(--s6)", hex: LIGHT.s6 },
+    { k: "support", name: "Supporting artists", detail: "", color: "var(--s5)", hex: LIGHT.s5 },
+    { k: "production", name: "Production & labor", detail: "sound, security, gear, crew, visuals", color: "var(--s6)", hex: LIGHT.s6 },
     { k: "marketing", name: "Marketing", detail: "", color: "var(--s7)", hex: LIGHT.s7 },
     { k: "other", name: "Other costs and contingency", detail: "", color: "var(--s8)", hex: LIGHT.s8 },
     { k: "profit", name: "Profit", detail: "ours", color: "var(--seg-profit)", text: "var(--seg-profit-text)", hex: LIGHT.segProfit }
@@ -492,7 +498,6 @@
     var L = r.costs, out = [];
     out.push(R("Headliner all-in (pay, travel, rider)", r.headliner.total));
     out.push(R("Supporting artists (" + inp.supportSlots + " x " + fmt$(inp.supportPrice) + ")", L.support));
-    out.push(inp.vjOn ? R("VJ", L.vj) : OFF("VJ"));
     out.push(R("Total talent cost", talentTotal(r), "money", "total"));
     return out;
   }
@@ -515,6 +520,7 @@
       R("Venue rental", L.venueRental),
       R("Labor", L.soundTechs + L.stagehands),
       R("Production", L.security + L.sound + L.gear + L.photo),
+      R("Visual production", L.vj + L.ld),
       R("Marketing", L.ads + L.poster),
       R("Insurance", L.insurance),
       R("Custom", L.custom),

@@ -209,7 +209,7 @@
     var ptThr = threshold(inp.hlPerTicketStart, inp.hlPerTicketStartN, hlBE);
     var pctBasisAtStart = pctThr > 0 ? basisValue(rs[Math.min(pctThr, S)], inp.hlPctBasis) : 0;
     var guaranteeAmt = inp.hlGuaranteeOn ? inp.hlGuarantee : 0;
-    var talentTotal = h.total + L.support + L.vj;
+    var talentTotal = h.total + L.support;
     // Offer (padded) version: same tickets and deal, offer cost amounts (M.offerInputs).
     var offerInp = M.offerInputs(inp);
     var oHLBE = M.headlinerBreakEven(offerInp);
@@ -301,10 +301,9 @@
     inRow("Hospitality / rider", yMoney(inp.hlHospitality, "HLHospitality"));
     I.add([]);
 
-    heading(I, "Support & VJ", 4);
+    heading(I, "Support", 4);
     inRow("Supporting slots", yInt(inp.supportSlots, "SupportSlots"));
     inRow("Price per slot", yMoney(inp.supportPrice, "SupportPrice"));
-    inRow("VJ", yMoney(inp.vj, "VJFee"), yOn(inp.vjOn, "VJOn"));
     I.add([]);
 
     heading(I, "Labor", 4);
@@ -319,6 +318,11 @@
     inRow("Sound rental", yMoney(inp.sound, "SoundRental"), yOn(inp.soundOn, "SoundRentalOn"));
     inRow("Additional deck / gear", yMoney(inp.gear, "Gear"), yOn(inp.gearOn, "GearOn"));
     inRow("Photo / video", yMoney(inp.photo, "Photo"));
+    I.add([]);
+
+    heading(I, "Visual production", 4);
+    inRow("VJ", yMoney(inp.vj, "VJFee"), yOn(inp.vjOn, "VJOn"));
+    inRow("Lighting designer (LD)", yMoney(inp.ld, "LDFee"), yOn(inp.ldOn, "LDOn"));
     I.add([]);
 
     heading(I, "Marketing", 4);
@@ -389,7 +393,7 @@
       ["hlPerTicketStartN", "HLPerTicketStartN", "int"], ["hlBackendOn", "HLBackendOn", "bool"], ["hlBackendPct", "HLBackendPct", "pct"], ["hlVersus", "HLVersus", "yes"],
       ["hlCapOn", "HLCapOn", "bool"], ["hlCap", "HLCap", "money"],
       ["hlTravel", "HLTravel", "money"], ["hlHospitality", "HLHospitality", "money"], ["supportSlots", "SupportSlots", "int"], ["supportPrice", "SupportPrice", "money"],
-      ["vjOn", "VJOn", "bool"], ["vj", "VJFee", "money"], ["soundTechsOn", "SoundTechsOn", "bool"], ["soundTechs", "SoundTechs", "int"],
+      ["vjOn", "VJOn", "bool"], ["vj", "VJFee", "money"], ["ldOn", "LDOn", "bool"], ["ld", "LDFee", "money"], ["soundTechsOn", "SoundTechsOn", "bool"], ["soundTechs", "SoundTechs", "int"],
       ["soundTechPay", "SoundTechPay", "money"], ["stagehandsOn", "StagehandsOn", "bool"], ["stagehands", "Stagehands", "int"], ["stagehandPay", "StagehandPay", "money"],
       ["securityOn", "SecurityOn", "bool"], ["security", "Security", "money"], ["soundOn", "SoundRentalOn", "bool"], ["sound", "SoundRental", "money"],
       ["gearOn", "GearOn", "bool"], ["gear", "Gear", "money"], ["photo", "Photo", "money"], ["ads", "Ads", "money"], ["poster", "Poster", "money"],
@@ -573,8 +577,7 @@
     line("Headliner pay", "HLPayAtCount", h.pay);
     line("Headliner travel / hotel and hospitality", "HLTravel+HLHospitality", L.headlinerTravel + L.headlinerHospitality);
     line("Supporting artists (slots x price per slot)", "SupportSlots*SupportPrice", L.support, "SupportAmt");
-    line("VJ", 'IF(VJOn="On",VJFee,0)', L.vj, "VJAmt");
-    sub("Talent subtotal", "HLPayAtCount+HLTravel+HLHospitality+SupportAmt+VJAmt", talentTotal);
+    sub("Talent subtotal", "HLPayAtCount+HLTravel+HLHospitality+SupportAmt", talentTotal);
     Co.add([]);
     group("Venue");
     line("Flat rental / fee", 'IF(VenueRentalOn="On",VenueRental,0)', L.venueRental, "VenueRentalAmt");
@@ -594,6 +597,11 @@
     line("Photo / video", "Photo", L.photo, "PhotoAmt");
     sub("Production subtotal", "SecurityAmt+SoundAmt+GearAmt+PhotoAmt", L.security + L.sound + L.gear + L.photo);
     Co.add([]);
+    group("Visual production");
+    line("VJ", 'IF(VJOn="On",VJFee,0)', L.vj, "VJAmt");
+    line("Lighting designer (LD)", 'IF(LDOn="On",LDFee,0)', L.ld, "LDAmt");
+    sub("Visual production subtotal", "VJAmt+LDAmt", L.vj + L.ld);
+    Co.add([]);
     group("Marketing");
     line("Advertising budget", "Ads", L.ads, "AdsAmt");
     line("Poster design", "Poster", L.poster, "PosterAmt");
@@ -607,7 +615,7 @@
     line("Custom cost lines (listed on Inputs)", "SUM(CustomAmounts)", L.custom, "CustomAmt");
     Co.add([]);
     Co.add([null, txt("Contingency base (fixed costs, guarantee included)", "label"),
-      fx("GuaranteeAmt+HLTravel+HLHospitality+SupportAmt+VJAmt+VenueRentalAmt+SoundTechsAmt+StagehandsAmt+SecurityAmt+SoundAmt+GearAmt+PhotoAmt+AdsAmt+PosterAmt+InsuranceAmt+CustomAmt",
+      fx("GuaranteeAmt+HLTravel+HLHospitality+SupportAmt+VJAmt+LDAmt+VenueRentalAmt+SoundTechsAmt+StagehandsAmt+SecurityAmt+SoundAmt+GearAmt+PhotoAmt+AdsAmt+PosterAmt+InsuranceAmt+CustomAmt",
         r.contingencyBase, "money", "label", { name: "FixedBase" })]);
     Co.add([null, txt("Contingency", "label"), fx("FixedBase*ContingencyPct", r.contingency, "money", "label", { name: "Contingency" }),
       fx("ContingencyPct", inp.contingencyPct / 100, "pct", "muted", { fmt: FMT.pctIn })]);
@@ -624,10 +632,11 @@
     Co.add([]);
     heading(Co, "Costs by category");
     Co.add([null, txt("Category", "subhead"), txt("Amount", "subhead", { align: "right" })]);
-    [["Talent", "HLPayAtCount+HLTravel+HLHospitality+SupportAmt+VJAmt", talentTotal],
+    [["Talent", "HLPayAtCount+HLTravel+HLHospitality+SupportAmt", talentTotal],
      ["Venue rental", "VenueRentalAmt", L.venueRental],
      ["Labor", "SoundTechsAmt+StagehandsAmt", laborAmt],
      ["Production", "SecurityAmt+SoundAmt+GearAmt+PhotoAmt", L.security + L.sound + L.gear + L.photo],
+     ["Visual production", "VJAmt+LDAmt", L.vj + L.ld],
      ["Marketing", "AdsAmt+PosterAmt", L.ads + L.poster],
      ["Insurance", "InsuranceAmt", L.insurance],
      ["Custom", "CustomAmt", L.custom],
@@ -645,6 +654,7 @@
     line("Headliner hospitality / rider", eff("hlHospitality", "HLHospitality"), OL.headlinerHospitality, "OfferHospAmt");
     line("Supporting artists (slots x price per slot)", "SupportSlots*" + eff("supportPrice", "SupportPrice"), OL.support, "OfferSupportAmt");
     line("VJ", onEff("VJOn", "vj", "VJFee"), OL.vj, "OfferVJAmt");
+    line("Lighting designer (LD)", onEff("LDOn", "ld", "LDFee"), OL.ld, "OfferLDAmt");
     line("Flat rental / fee", onEff("VenueRentalOn", "venueRental", "VenueRental"), OL.venueRental, "OfferVenueRentalAmt");
     line("Sound techs (people x pay each)", onEff("SoundTechsOn", "soundTechPay", "SoundTechPay", "SoundTechs"), OL.soundTechs, "OfferSoundTechsAmt");
     line("Stagehands (people x pay each)", onEff("StagehandsOn", "stagehandPay", "StagehandPay", "Stagehands"), OL.stagehands, "OfferStagehandsAmt");
@@ -658,7 +668,7 @@
     line("Custom cost lines (same as above)", "CustomAmt", L.custom);
     line("Offer-only lines (listed on Inputs)", "SUM(OfferLineAmounts)", offerLinesSum, "OfferLinesAmt");
     Co.add([null, txt("Offer contingency base", "label"),
-      fx("GuaranteeAmt+OfferTravelAmt+OfferHospAmt+OfferSupportAmt+OfferVJAmt+OfferVenueRentalAmt+OfferSoundTechsAmt+OfferStagehandsAmt+OfferSecurityAmt+OfferSoundAmt+OfferGearAmt+OfferPhotoAmt+OfferAdsAmt+OfferPosterAmt+OfferInsuranceAmt+CustomAmt+OfferLinesAmt",
+      fx("GuaranteeAmt+OfferTravelAmt+OfferHospAmt+OfferSupportAmt+OfferVJAmt+OfferLDAmt+OfferVenueRentalAmt+OfferSoundTechsAmt+OfferStagehandsAmt+OfferSecurityAmt+OfferSoundAmt+OfferGearAmt+OfferPhotoAmt+OfferAdsAmt+OfferPosterAmt+OfferInsuranceAmt+CustomAmt+OfferLinesAmt",
         oAt.contingencyBase, "money", "label", { name: "OfferFixedBase" })]);
     Co.add([null, txt("Offer contingency", "label"), fx("OfferFixedBase*ContingencyPct", oAt.contingency, "money", "label", { name: "OfferContingency" })]);
     Co.add([null, txt("Offer fixed costs with contingency", "subtotal"), fx("OfferFixedBase+OfferContingency", oAt.fixedCostsTotal, "money", "subtotal", { name: "OfferFixedTotal" })]);
@@ -691,8 +701,7 @@
     heading(T, "Total talent cost");
     trow("Headliner all-in (pay, travel, rider)", "HLAllIn", h.total);
     trow("Supporting artists", "SupportAmt", L.support);
-    trow("VJ", "VJAmt", L.vj);
-    trow("Total talent cost", "HLAllIn+SupportAmt+VJAmt", talentTotal, null, "total");
+    trow("Total talent cost", "HLAllIn+SupportAmt", talentTotal, null, "total");
     T.add([]);
     heading(T, "Working values");
     T.add([null, txt("Used by the formulas. " + NEVER.toLocaleString("en-US") + " stands for never.", "muted", { span: 3 })]);
@@ -807,8 +816,8 @@
     var MONEY_F = {
       tax: idx("ByT_Tax"), ebFees: idx("ByT_Fees"), doorProc: idx("ByT_DoorProc"),
       venue: idx("ByT_DoorCut") + "+" + idx("ByT_PerHead") + "+VenueRentalAmt",
-      headliner: "HLAllIn", supportVj: "SupportAmt+VJAmt",
-      production: "SoundAmt+SecurityAmt+GearAmt+SoundTechsAmt+StagehandsAmt",
+      headliner: "HLAllIn", support: "SupportAmt",
+      production: "SoundAmt+SecurityAmt+GearAmt+SoundTechsAmt+StagehandsAmt+VJAmt+LDAmt",
       marketing: "AdsAmt+PosterAmt", other: "InsuranceAmt+PhotoAmt+CustomAmt+Contingency",
       profit: "MAX(0,NetAtCount)", loss: "MAX(0,-NetAtCount)"
     };
@@ -932,7 +941,7 @@
     bar(Of, "04   EXPENSES", 7);
     hdr(Of, ["ITEM", "BUDGET"]);
     var oExp = [
-      ["Supporting artists", "OfferSupportAmt", OL.support], ["VJ", "OfferVJAmt", OL.vj], ["Sound techs", "OfferSoundTechsAmt", OL.soundTechs],
+      ["Supporting artists", "OfferSupportAmt", OL.support], ["VJ", "OfferVJAmt", OL.vj], ["Lighting designer (LD)", "OfferLDAmt", OL.ld], ["Sound techs", "OfferSoundTechsAmt", OL.soundTechs],
       ["Stagehands", "OfferStagehandsAmt", OL.stagehands], ["Contracted security", "OfferSecurityAmt", OL.security], ["Sound rental", "OfferSoundAmt", OL.sound],
       ["Additional deck / gear", "OfferGearAmt", OL.gear], ["Photo / video", "OfferPhotoAmt", OL.photo], ["Advertising", "OfferAdsAmt", OL.ads],
       ["Poster design", "OfferPosterAmt", OL.poster], ["Event insurance", "OfferInsuranceAmt", OL.insurance], ["Venue rental / fee", "OfferVenueRentalAmt", OL.venueRental],
@@ -1036,10 +1045,10 @@
       bbar("Expenses");
       bhead(["Payee", "Role", "Amount", "Paid", "Notes"]);
       var hl = showNm || "Headliner", ven = String(inp.venueName || "").trim() || "Venue";
-      var A = off ? { travel: "OfferTravelAmt", hosp: "OfferHospAmt", sup: "OfferSupportAmt", vj: "OfferVJAmt", st: "OfferSoundTechsAmt", sh: "OfferStagehandsAmt", sec: "OfferSecurityAmt",
+      var A = off ? { travel: "OfferTravelAmt", hosp: "OfferHospAmt", sup: "OfferSupportAmt", vj: "OfferVJAmt", ld: "OfferLDAmt", st: "OfferSoundTechsAmt", sh: "OfferStagehandsAmt", sec: "OfferSecurityAmt",
                       snd: "OfferSoundAmt", gear: "OfferGearAmt", photo: "OfferPhotoAmt", ads: "OfferAdsAmt", poster: "OfferPosterAmt", ins: "OfferInsuranceAmt", rent: "OfferVenueRentalAmt",
                       cont: "OfferContingency", pay: "OfferPayAtCount" }
-                  : { travel: "HLTravel", hosp: "HLHospitality", sup: "SupportAmt", vj: "VJAmt", st: "SoundTechsAmt", sh: "StagehandsAmt", sec: "SecurityAmt",
+                  : { travel: "HLTravel", hosp: "HLHospitality", sup: "SupportAmt", vj: "VJAmt", ld: "LDAmt", st: "SoundTechsAmt", sh: "StagehandsAmt", sec: "SecurityAmt",
                       snd: "SoundAmt", gear: "GearAmt", photo: "PhotoAmt", ads: "AdsAmt", poster: "PosterAmt", ins: "InsuranceAmt", rent: "VenueRentalAmt",
                       cont: "Contingency", pay: "HLPayAtCount" };
       var C2 = res.costs;
@@ -1050,6 +1059,7 @@
         [hl, "Hospitality / rider", A.hosp, C2.headlinerHospitality, ""],
         [null, "Supporting artists", A.sup, C2.support, inp.supportSlots + " x " + X.fmt$(off ? offerInp.supportPrice : inp.supportPrice)],
         [null, "VJ", A.vj, C2.vj, ""],
+        [null, "Lighting designer (LD)", A.ld, C2.ld, ""],
         [null, "Sound techs", A.st, C2.soundTechs, ""],
         [null, "Stagehands", A.sh, C2.stagehands, ""],
         [null, "Contracted security", A.sec, C2.security, ""],

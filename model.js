@@ -108,6 +108,8 @@
     supportPrice: 75,
     vjOn: false,
     vj: 300,
+    ldOn: false,              // lighting designer
+    ld: 300,
     // Labor (people x pay each for the night)
     soundTechsOn: false,
     soundTechs: 1,
@@ -138,9 +140,9 @@
   };
 
   // Costs the offer can pad, in display order. A cost that is off stays off in the offer.
-  var OFFER_KEYS = ["hlTravel", "hlHospitality", "supportPrice", "vj", "soundTechPay", "stagehandPay",
+  var OFFER_KEYS = ["hlTravel", "hlHospitality", "supportPrice", "vj", "ld", "soundTechPay", "stagehandPay",
     "security", "sound", "gear", "photo", "ads", "poster", "insurance", "venueRental"];
-  var OFFER_TOGGLE = { vj: "vjOn", soundTechPay: "soundTechsOn", stagehandPay: "stagehandsOn", security: "securityOn",
+  var OFFER_TOGGLE = { vj: "vjOn", ld: "ldOn", soundTechPay: "soundTechsOn", stagehandPay: "stagehandsOn", security: "securityOn",
     sound: "soundOn", gear: "gearOn", insurance: "insuranceOn", venueRental: "venueRentalOn" };
 
   // Ticket count the slider starts at for the default scenario.
@@ -369,6 +371,7 @@
       headlinerHospitality: inp.hlHospitality,
       support: inp.supportSlots * inp.supportPrice,
       vj: inp.vjOn ? inp.vj : 0,
+      ld: inp.ldOn ? inp.ld : 0,
       soundTechs: inp.soundTechsOn ? inp.soundTechs * inp.soundTechPay : 0,
       stagehands: inp.stagehandsOn ? inp.stagehands * inp.stagehandPay : 0,
       security: inp.securityOn ? inp.security : 0,
@@ -488,8 +491,8 @@
       doorProc: ts.doorProc,
       venue: ts.doorCut + ts.perHead + L.venueRental,
       headliner: headlinerTotal,
-      supportVj: L.support + L.vj,
-      production: L.sound + L.security + L.gear + L.soundTechs + L.stagehands,
+      support: L.support,
+      production: L.sound + L.security + L.gear + L.soundTechs + L.stagehands + L.vj + L.ld,
       marketing: L.ads + L.poster,
       other: L.insurance + L.photo + L.custom + fc.contingency,
       profit: Math.max(0, net),

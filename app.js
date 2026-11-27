@@ -216,8 +216,7 @@
     host.appendChild(lgroup("Talent", "talent", [
       lrow("sub", [el("span", { text: "Headliner pay" }), lval("led-hl-pay")]),
       lrow("sub", [el("span", { text: "Headliner travel / hotel and hospitality" }), lval("led-hl-extra")]),
-      lrow("sub", [el("span", { id: "led-support-label", text: "Supporting artists" }), lval("led-support")]),
-      lrow("sub", [el("span", { text: "VJ" }), lval("led-vj")])
+      lrow("sub", [el("span", { id: "led-support-label", text: "Supporting artists" }), lval("led-support")])
     ], "led-talent"));
     host.appendChild(lgroup("Venue", "venue", [
       lrow("sub", [el("span", { text: "Flat rental / fee" }), lval("led-venue-rental")]),
@@ -1614,7 +1613,6 @@
     set("led-hl-extra", L.headlinerTravel + L.headlinerHospitality);
     $("led-support-label").textContent = "Supporting artists (" + inp.supportSlots + " x " + fmt$(inp.supportPrice) + ")";
     set("led-support", L.support);
-    set("led-vj", L.vj, inp.vjOn);
     set("led-talent", talentTotal(r));
     set("led-venue-rental", L.venueRental, inp.venueRentalOn);
     var taken = r.venue.doorCut + r.venue.perHead;
@@ -1624,6 +1622,7 @@
     set("led-stagehands", L.stagehands, inp.stagehandsOn);
     set("led-labor", L.soundTechs + L.stagehands);
     set("led-production", L.security + L.sound + L.gear + L.photo);
+    set("led-visual", L.vj + L.ld);
     set("led-marketing", L.ads + L.poster);
     set("led-insurance", L.insurance);
     set("led-custom", L.custom);
