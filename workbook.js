@@ -313,10 +313,14 @@
     inRow("Ticket bonuses", null, yOn(inp.hlBonusOn, "HLBonusOn"), "Each pays its whole amount once tickets sold reach its trigger; they add up.");
     I.add([null, txt("Bonus trigger", "subhead"), txt("Amount", "subhead", { align: "right" }), txt("Number", "subhead", { align: "right" }), txt("Pays from", "subhead")]);
     for (var bi = 1; bi <= BONUS_SLOTS; bi++) {
-      var brow = inp.hlBonuses[bi - 1];
+      var brow = inp.hlBonuses[bi - 1], bR = I.next();
+      // Number: 0 or more, and above 1 for % sold, so "80%" typed in (stored as 0.8) is refused. Same-row
+      // cell refs (trigger in B, number in D) rather than names, which Google Sheets' rules may not resolve.
+      var numRule = "AND($D$" + bR + ">=0,OR($B$" + bR + "<>" + str(TRIGGER_LABEL.pct) + ",$D$" + bR + ">1))";
       I.add([null, cell(brow ? TRIGGER_LABEL[brow.trigger] : "", "text", "input", { name: "Bonus_" + bi + "_Trigger", dv: choice(vals(TRIGGER_LABEL), true) }),
         cell(brow ? brow.amount : null, "money", "input", { name: "Bonus_" + bi + "_Amount", dv: { type: "min0" } }),
-        cell(brow ? brow.n : null, "auto", "input", { name: "Bonus_" + bi + "_Number", dv: { type: "min0" }, fmt: "General" }),
+        cell(brow ? brow.n : null, "auto", "input", { name: "Bonus_" + bi + "_Number", fmt: "General", dv: { type: "custom", formula: numRule, title: "Number",
+          error: "Enter 0 or more. For " + TRIGGER_LABEL.pct + ", type the percent as a plain number: 80 for 80%." } }),
         fx(paysFromF(bi), brow ? M.bonusAt(brow, S) : "", "auto", "muted", { name: "Bonus_" + bi + "_PaysFrom", fmt: '#,##0" tickets"', align: "left" })]);
     }
     I.add([null, txt("Number is the ticket count for " + TRIGGER_LABEL.tickets + ", or the percent of sellable tickets for " + TRIGGER_LABEL.pct +
@@ -1443,6 +1447,7 @@
 
   function validation(dv) {
     var base = { allowBlank: true, showErrorMessage: true, errorStyle: "stop" };
+    if (dv.type === "custom") return Object.assign(base, { type: "custom", formulae: [dv.formula], errorTitle: dv.title, error: dv.error });
     if (dv.type === "list") return Object.assign(base, { type: "list", allowBlank: !!dv.blank, formulae: ['"' + dv.list.join(",") + '"'], errorTitle: "Pick from the list", error: "Choose one of: " + dv.list.join(", ") });
     if (dv.type === "range") return Object.assign(base, { type: "whole", operator: "between", formulae: [dv.min, dv.max], errorTitle: "Out of range", error: "Enter a whole number from " + dv.min + " to " + dv.max + "." });
     if (dv.type === "int0") return Object.assign(base, { type: "whole", operator: "greaterThanOrEqual", formulae: [0], errorTitle: "Whole number", error: "Enter a whole number, 0 or more." });

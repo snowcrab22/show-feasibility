@@ -1175,6 +1175,7 @@
     renderVerdict(last);
     renderTiles(last);
     if (current === "overview" || !current) { renderChart(last); renderPayChart(last); }
+    renderDipNote(last);
     renderMoney(r);
     renderHeatmap(inp);
     renderScenarios(last);
@@ -1360,6 +1361,10 @@
     wrap.appendChild(root);
     if (hadFocus) root.focus({ preventScroll: true });
     $("chart-sub").textContent = b.be === null ? "Can't break even at this price, even sold out" : "Break-even at " + b.be + " of " + b.S + " tickets";
+  }
+  // Note under the profit chart when a ticket bonus pulls net back below $0 after break-even.
+  // Outside renderChart: its pixel helper X() hides the module's X (ShowExport).
+  function renderDipNote(b) {
     var dip = X.bonusDipNote(b);
     $("chart-dip").textContent = dip;
     $("chart-dip").hidden = !dip;
