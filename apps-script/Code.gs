@@ -189,11 +189,163 @@ function sheetsRequests(deco, sheetIds) {
   return reqs;
 }
 
+// ------------------------------------------------------------------ requests
+// req: { action, passcode, ... }. env: what the real script (realEnv) or a test supplies:
+// { passcode, cache, readRecords(), appendRecord(rec), withLock(fn), newId(), now(), makeSheet(fileName, b64, deco) }.
+// Never throws: every reply is { ok: true, ... } or { ok: false, error, message }.
+function fail(error, message) { return { ok: false, error: error, message: message }; }
+var NOT_FOUND = "That saved scenario isn't in the team list.";
+function handle(req, env) {
+  try {
+    if (!req || typeof req !== "object") return fail("bad", "The request wasn't understood.");
+    var pc = checkPasscode(req.passcode, env.passcode, env.cache);
+    if (pc === "unset") return fail("server", "PASSCODE isn't set in Script Properties.");
+    if (pc === "locked") return fail("locked", "Too many wrong passcodes. Try again in 10 minutes.");
+    if (pc === "passcode") return fail("passcode", "That passcode didn't work.");
+    var records, rec;
+    switch (req.action) {
+      case "check":
+        return { ok: true };
+      case "list":
+        return { ok: true, items: listItems(env.readRecords()) };
+      case "history":
+        var versions = historyOf(env.readRecords(), String(req.id || ""));
+        return versions.length ? { ok: true, versions: versions } : fail("notfound", NOT_FOUND);
+      case "load":
+        records = env.readRecords();
+        rec = findVersion(records, String(req.id || ""), req.version);
+        if (!rec) return fail("notfound", NOT_FOUND);
+        return { ok: true, id: rec.id, version: rec.version, latestVersion: findVersion(records, rec.id).version,
+          name: rec.name, savedBy: rec.savedBy, savedAt: rec.savedAt, data: rec.data };
+      case "save":
+        var v = validateSave(req);
+        if (!v.ok) return v;
+        return env.withLock(function () {
+          var all = env.readRecords(), id = env.newId();
+          for (var i = 0; i < 5 && findVersion(all, id); i++) id = env.newId();
+          var plan = planSave(all, v.clean, id, env.now());
+          if (plan.error) return fail("notfound", NOT_FOUND);
+          env.appendRecord(plan.record);
+          return { ok: true, id: plan.record.id, version: plan.record.version, overtook: plan.overtook };
+        });
+      case "sheet":
+        if (typeof req.xlsx !== "string" || !req.xlsx) return fail("bad", "No spreadsheet was sent.");
+        var made = env.makeSheet(String(req.fileName || "Show feasibility"), req.xlsx, req.deco || null);
+        return { ok: true, id: made.id, url: made.url, decorated: !!made.decorated };
+      default:
+        return fail("bad", "Unknown action.");
+    }
+  } catch (e) {
+    return fail("server", e && e.message ? e.message : String(e));
+  }
+}
+
+// ------------------------------------------------------------------ Apps Script only
+// (Not run by the Node tests: these use SpreadsheetApp, DriveApp, Drive, Sheets and friends.)
+var XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+// Columns written as plain text, so Sheets never turns an ID, a name or the timestamp into a number or date.
+var TEXT_KEYS = { id: true, name: true, savedBy: true, savedAt: true, show: true, venue: true, data: true };
+
+function doGet() {
+  return ContentService.createTextOutput("Show Feasibility team list is running.");
+}
+function doPost(e) {
+  var reply;
+  try {
+    var req = null;
+    try { req = JSON.parse(e && e.postData ? e.postData.contents : ""); } catch (err) { req = null; }
+    reply = req ? handle(req, realEnv()) : fail("bad", "The request wasn't JSON.");
+  } catch (err2) {
+    reply = fail("server", err2 && err2.message ? err2.message : String(err2));
+  }
+  return ContentService.createTextOutput(JSON.stringify(reply)).setMimeType(ContentService.MimeType.JSON);
+}
+function realEnv() {
+  var props = PropertiesService.getScriptProperties();
+  var cache = CacheService.getScriptCache();
+  return {
+    passcode: props.getProperty("PASSCODE") || "",
+    cache: { get: function (k) { return cache.get(k); }, put: function (k, v, s) { cache.put(k, String(v), s); } },
+    readRecords: function () { return recordsFromValues(scenariosSheet().getDataRange().getValues()); },
+    appendRecord: function (rec) {
+      var sh = scenariosSheet();
+      var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+      var row = sh.getLastRow() + 1;
+      header.forEach(function (h, c) { if (TEXT_KEYS[keyForHeader(h)]) sh.getRange(row, c + 1).setNumberFormat("@"); });
+      sh.getRange(row, 1, 1, header.length).setValues([rowFromRecord(rec, header)]);
+    },
+    withLock: function (fn) {
+      var lock = LockService.getScriptLock();
+      lock.waitLock(20000);
+      try { return fn(); } finally { lock.releaseLock(); }
+    },
+    newId: function () { return newId(Math.random); },
+    now: function () { return new Date().toISOString(); },
+    makeSheet: makeSheetReal
+  };
+}
+function activeSpreadsheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error("This script has to be opened from the Saved Scenarios spreadsheet (Extensions → Apps Script).");
+  return ss;
+}
+// The Scenarios tab, created (or given its missing headers) when needed.
+function scenariosSheet() {
+  var ss = activeSpreadsheet();
+  var sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh) {
+    var tabs = ss.getSheets();
+    sh = tabs.length === 1 && tabs[0].getLastRow() === 0 ? tabs[0].setName(SHEET_NAME) : ss.insertSheet(SHEET_NAME);
+  }
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS.map(function (h) { return h[0]; })]).setFontWeight("bold");
+    sh.setFrozenRows(1);
+    return sh;
+  }
+  var header = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0];
+  var miss = missingHeaders(header);
+  if (miss.length) sh.getRange(1, header.length + 1, 1, miss.length).setValues([miss]).setFontWeight("bold");
+  return sh;
+}
+// "Google Sheets" folder next to the spreadsheet; its ID is kept in Script Property EXPORT_FOLDER_ID.
+function exportFolder() {
+  var props = PropertiesService.getScriptProperties();
+  var id = props.getProperty("EXPORT_FOLDER_ID");
+  if (id) {
+    try { var f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) { /* deleted: make a new one */ }
+  }
+  var parents = DriveApp.getFileById(activeSpreadsheet().getId()).getParents();
+  var parent = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
+  var folder = parent.createFolder("Google Sheets");
+  props.setProperty("EXPORT_FOLDER_ID", folder.getId());
+  return folder;
+}
+// Upload the page's .xlsx as a Google Sheet, add the lock and chart, share it anyone-with-link can edit.
+function makeSheetReal(fileName, b64, deco) {
+  var name = String(fileName || "Show feasibility").replace(/\.xlsx$/i, "");
+  var blob = Utilities.newBlob(Utilities.base64Decode(b64), XLSX_MIME, name + ".xlsx");
+  var file = Drive.Files.create({ name: name, mimeType: "application/vnd.google-apps.spreadsheet", parents: [exportFolder().getId()] },
+    blob, { fields: "id" });
+  var id = file.id, decorated = true;
+  try {
+    var got = Sheets.Spreadsheets.get(id, { fields: "sheets.properties(sheetId,title)" });
+    var ids = {};
+    (got.sheets || []).forEach(function (s) { ids[s.properties.title] = s.properties.sheetId; });
+    var reqs = deco ? sheetsRequests(deco, ids) : [];
+    if (reqs.length) Sheets.Spreadsheets.batchUpdate({ requests: reqs }, id);
+  } catch (e) {
+    decorated = false;
+    console.warn("Lock and chart couldn't be added: " + e);
+  }
+  DriveApp.getFileById(id).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.EDIT);
+  return { id: id, url: "https://docs.google.com/spreadsheets/d/" + id + "/edit", decorated: decorated };
+}
+
 // Node (the page's tests) only; Apps Script has no `module`.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     HEADERS: HEADERS, recordsFromValues: recordsFromValues, rowFromRecord: rowFromRecord, missingHeaders: missingHeaders,
     listItems: listItems, historyOf: historyOf, findVersion: findVersion, validateSave: validateSave, planSave: planSave,
-    checkPasscode: checkPasscode, newId: newId, sheetsRequests: sheetsRequests
+    checkPasscode: checkPasscode, newId: newId, sheetsRequests: sheetsRequests, handle: handle
   };
 }
