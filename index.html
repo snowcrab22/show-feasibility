@@ -391,9 +391,14 @@ td.neg .mdetail { color: var(--crit-text); }
 .link-row { display: flex; gap: 8px; }
 .link-row input { flex: 1 1 auto; min-width: 0; font-size: 13px; }
 .saved-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.saved-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.saved-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
 .saved-list .saved-name { overflow-wrap: anywhere; font-weight: 600; }
 .saved-list .saved-date { color: var(--ink-2); font-size: 13px; }
+.saved-list .saved-history { grid-column: 1 / -1; list-style: none; margin: 0 0 0 16px; padding: 0; display: grid; gap: 4px; }
+.saved-list .saved-history li { grid-template-columns: minmax(0, 1fr) auto; padding: 3px 0; font-size: 13px; }
+.team-unlock, .team-main { display: grid; gap: 10px; }
+.team-unlock[hidden], .team-main[hidden] { display: none; }
+.team-whoami { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .export-ready a { font-weight: 600; overflow-wrap: anywhere; }
 
 /* Cost ledger */
@@ -698,7 +703,7 @@ td.neg .mdetail { color: var(--crit-text); }
               <button type="button" id="btn-copy-summary" class="primary">Copy summary</button>
               <button type="button" id="btn-copy-link">Copy link</button>
               <button type="button" id="btn-export">Download Excel file</button>
-              <button type="button" id="btn-gsheet" class="google-only" hidden>Open in Google Sheets</button>
+              <button type="button" id="btn-gsheet" class="team-only" hidden>Open in Google Sheets</button>
             </div>
             <p class="msg" id="share-msg" role="status" aria-live="polite"></p>
             <p class="msg" id="export-msg" role="status" aria-live="polite" hidden></p>
@@ -720,26 +725,41 @@ td.neg .mdetail { color: var(--crit-text); }
         </div>
       </div>
       <div class="sec-results" id="share-results">
-        <div class="card google-only" id="saved-card" hidden>
+        <div class="card team-only" id="saved-card" hidden>
           <div class="card-head"><h3>Saved scenarios</h3></div>
           <div class="share-grid">
-            <p class="hint">Saved in your Google Drive. Anyone with the link can open it; people you give edit access in Drive can save changes to it.</p>
-            <p class="saved-current" id="saved-current" hidden></p>
-            <div class="field">
-              <label for="save-name">Name</label>
-              <input type="text" id="save-name" autocomplete="off" spellcheck="false" placeholder="e.g. Incline – Jan 10">
+            <p class="hint">Saved to the KC PLUR team list. Anyone with the team passcode can open and save these.</p>
+            <div class="team-unlock" id="team-unlock" hidden>
+              <div class="field">
+                <label for="team-pass">Team passcode</label>
+                <input type="password" id="team-pass" autocomplete="current-password" spellcheck="false">
+              </div>
+              <div class="field">
+                <label for="team-who">Who are you?</label>
+                <select id="team-who"></select>
+              </div>
+              <div class="share-row"><button type="button" class="primary" id="btn-unlock">Unlock</button></div>
+              <p class="msg" id="unlock-msg" role="status" aria-live="polite"></p>
             </div>
-            <div class="share-row">
-              <button type="button" class="primary" id="btn-save">Save</button>
-              <button type="button" id="btn-save-new" hidden>Save as new</button>
+            <div class="team-main" id="team-main" hidden>
+              <p class="hint team-whoami"><span id="team-whoami-text"></span> <button type="button" class="small" id="btn-change-who">Change</button></p>
+              <p class="saved-current" id="saved-current" hidden></p>
+              <div class="field">
+                <label for="save-name">Name</label>
+                <input type="text" id="save-name" autocomplete="off" spellcheck="false" placeholder="e.g. Incline – Jan 10">
+              </div>
+              <div class="share-row">
+                <button type="button" class="primary" id="btn-save">Save</button>
+                <button type="button" id="btn-save-new" hidden>Save as new</button>
+              </div>
+              <div class="field" id="saved-link-field" hidden>
+                <label for="saved-link">Saved scenario link</label>
+                <div class="link-row"><input type="text" id="saved-link" readonly><button type="button" id="btn-copy-saved">Copy</button></div>
+              </div>
+              <p class="msg" id="saved-msg" role="status" aria-live="polite"></p>
+              <div class="share-row"><button type="button" id="btn-list-saved">Team scenarios</button></div>
+              <ul class="saved-list" id="saved-list" hidden></ul>
             </div>
-            <div class="field" id="saved-link-field" hidden>
-              <label for="saved-link">Saved scenario link</label>
-              <div class="link-row"><input type="text" id="saved-link" readonly><button type="button" id="btn-copy-saved">Copy</button></div>
-            </div>
-            <p class="msg" id="saved-msg" role="status" aria-live="polite"></p>
-            <div class="share-row"><button type="button" id="btn-list-saved">My saved scenarios</button></div>
-            <ul class="saved-list" id="saved-list" hidden></ul>
           </div>
         </div>
       </div>
@@ -751,7 +771,7 @@ td.neg .mdetail { color: var(--crit-text); }
 <script src="model.js?v=7"></script>
 <script src="export.js?v=9"></script>
 <script src="workbook.js?v=5"></script>
-<script src="google.js?v=4"></script>
-<script src="app.js?v=12"></script>
+<script src="team.js?v=1"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>
