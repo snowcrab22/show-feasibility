@@ -277,7 +277,8 @@ function realEnv() {
     withLock: function (fn) {
       var lock = LockService.getScriptLock();
       lock.waitLock(20000);
-      try { return fn(); } finally { lock.releaseLock(); }
+      // Flush before letting go, so the next save waiting on the lock reads this one's row.
+      try { return fn(); } finally { SpreadsheetApp.flush(); lock.releaseLock(); }
     },
     newId: function () { return newId(Math.random); },
     now: function () { return new Date().toISOString(); },

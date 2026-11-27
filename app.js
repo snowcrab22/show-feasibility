@@ -769,10 +769,11 @@
     pendingAction = then;
     showLocked(reasonText);
   }
-  // A "passcode" answer means the stored passcode no longer works (team.js has forgotten it).
-  function teamError(e, show) {
-    if (e && (e.code === "passcode" || e.code === "locked")) { showLocked(T.errorText(e), "err"); return; }
+  // Every error shows where the action was. A "passcode" answer also means the stored passcode no longer
+  // works (team.js has forgotten it): ask for it again, then run retry().
+  function teamError(e, show, retry) {
     show(T.errorText(e));
+    if (e && e.code === "passcode") { pendingAction = retry || null; showLocked(T.errorText(e), "err"); }
   }
   function onUnlock() {
     var pass = $("team-pass").value, who = $("team-who").value, btn = $("btn-unlock");
@@ -811,7 +812,7 @@
         toast("Opened " + name + " (v" + rep.version + ").", "ok");
       }).catch(function (e) {
         if (e && e.code === "damaged") toast(e.message, "err");
-        else teamError(e, function (t) { toast(t, "err"); });
+        else teamError(e, function (t) { toast(t, "err"); }, function () { openSavedFile(id, version); });
       });
     });
   }
@@ -828,7 +829,7 @@
           shortTime(res.overtook.savedAt) + " after you opened it; theirs is in History.", "ok");
         else savedMsg("Saved changes as v" + res.version + ". The link stays the same.", "ok");
       }).catch(function (e) {
-        teamError(e, function (t) { savedMsg(target && e && e.code === "notfound" ? t + " Use Save as new." : t, "err"); });
+        teamError(e, function (t) { savedMsg(target && e && e.code === "notfound" ? t + " Use Save as new." : t, "err"); }, function () { onSave(asNew); });
       });
     });
   }
@@ -850,7 +851,7 @@
         rep.items.forEach(function (f) { list.appendChild(savedRow(f)); });
         list.hidden = !rep.items.length;
         savedMsg(rep.items.length ? "" : "Nothing in the team list yet.");
-      }).catch(function (e) { teamError(e, function (t) { savedMsg(t, "err"); }); });
+      }).catch(function (e) { teamError(e, function (t) { savedMsg(t, "err"); }, onListSaved); });
     });
   }
   function onHistory(btn) {
@@ -866,7 +867,7 @@
       })));
       btn.setAttribute("aria-expanded", "true");
       savedMsg("");
-    }).catch(function (e) { teamError(e, function (t) { savedMsg(t, "err"); }); });
+    }).catch(function (e) { teamError(e, function (t) { savedMsg(t, "err"); }, function () { onHistory(btn); }); });
   }
   // Build the same workbook as the download; the team script turns it into a Google Sheet that anyone
   // with the link can edit, in the KC PLUR Drive.
@@ -905,7 +906,7 @@
     }).catch(function (e) {
       if (win && !win.closed) win.close();
       if (e && e.message === "ExcelJS failed to load") exportMsg("Couldn't load the spreadsheet library. Check your connection and try again.", "err");
-      else teamError(e, function (t) { exportMsg(t, "err"); });
+      else teamError(e, function (t) { exportMsg(t, "err"); }, function () { exportMsg("Unlocked. Click Open in Google Sheets again.", "ok"); });
       if (window.console) console.warn("Google Sheets:", e);
     }).then(release);
   }
